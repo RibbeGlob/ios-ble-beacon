@@ -10,15 +10,14 @@ final class BleClient: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
 
-    // Service/Characteristic z Twojego modułu (SVC_UUID_16 = 0xFFF0, często char = 0xFFF1)
-    // Jeśli okaże się inna charakterystyka – kod poniżej i tak wybierze pierwszą zapisywalną.
+    // Service FFF0 + preferowana char FFF1 (przykładowo)
     private let targetService = CBUUID(string: "0000FFF0-0000-1000-8000-00805F9B34FB")
     private let preferredTargetChar = CBUUID(string: "0000FFF1-0000-1000-8000-00805F9B34FB")
 
     private var isScanning = false
-    private let scanWindow: TimeInterval = 6.0        // krótki skan – iOS nie lubi długich w tle
+    private let scanWindow: TimeInterval = 6.0
     private var lastConnectAttempt: Date = .distantPast
-    private let connectCooldown: TimeInterval = 15.0   // jak na Androidzie (15 s)
+    private let connectCooldown: TimeInterval = 15.0
 
     override init() {
         super.init()
@@ -27,7 +26,8 @@ final class BleClient: NSObject, ObservableObject {
             queue: .main,
             options: [
                 CBCentralManagerOptionShowPowerAlertKey: true,
-                CBCentralManagerRestorationIdentifierKey: "pl.yourcompany.ble.central"
+                // ✅ poprawna stała restore identifier:
+                CBCentralManagerOptionRestoreIdentifierKey: "pl.yourcompany.ble.central"
             ]
         )
         requestLocalNotificationsIfNeeded()
@@ -95,7 +95,6 @@ extension BleClient: CBCentralManagerDelegate {
                         didDiscover peripheral: CBPeripheral,
                         advertisementData: [String : Any],
                         rssi RSSI: NSNumber) {
-        // cooldown – nie łącz zbyt często
         guard Date().timeIntervalSince(lastConnectAttempt) >= connectCooldown else { return }
         lastConnectAttempt = Date()
 
@@ -119,7 +118,6 @@ extension BleClient: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         update("disconnected")
-        // prosty retry po 10 s (opcjonalnie)
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             guard let self else { return }
             if let p = self.peripheral { central.connect(p, options: nil) }
@@ -136,7 +134,7 @@ extension BleClient: CBPeripheralDelegate {
         for s in services {
             print("[BleClient] service:", s.uuid.uuidString)
             if s.uuid == targetService {
-                peripheral.discoverCharacteristics(nil, for: s) // odkryj wszystkie, wybierzemy właściwą
+                peripheral.discoverCharacteristics(nil, for: s)
             }
         }
     }
@@ -147,42 +145,27 @@ extension BleClient: CBPeripheralDelegate {
         guard error == nil else { update("char err"); return }
         guard let chars = service.characteristics, !chars.isEmpty else { update("no chars"); return }
 
-        // Log wszystkich znalezionych charów + właściwości
         for ch in chars {
             print("[BleClient] char:", ch.uuid.uuidString, "props:", ch.properties)
         }
 
-        // 1) jeśli mamy preferowaną (FFF1) – użyj jej
         if let ch = chars.first(where: { $0.uuid == preferredTargetChar }) {
-            writeDemoPayload(to: ch)
+            writeDemoPayload(on: peripheral, to: ch)   // ✅ przekazujemy bieżący peripheral
             return
         }
 
-        // 2) inaczej użyj pierwszej zapisywalnej
         if let writable = chars.first(where: { $0.properties.contains(.write) || $0.properties.contains(.writeWithoutResponse) }) {
-            writeDemoPayload(to: writable)
+            writeDemoPayload(on: peripheral, to: writable)  // ✅ j.w.
             return
         }
 
         update("no writable char")
     }
 
-    private func writeDemoPayload(to ch: CBCharacteristic) {
-        // —— DOPASUJ payload do trybu modułu ——
-        // a) Akcja offline (GPIO): "test"
-        // let payload = Data("test".utf8)
-
-        // b) Konfiguracja JSON (gdy expecting_json==true w urządzeniu):
-        // let json = #"{"ssid":"TwojaSiec","pass":"Haslo123","name":"MojeESP"}"#
-        // let payload = Data(json.utf8)
-
-        // c) Wiadomość base64 (gdy expecting_json==false):
-        // let raw = "hello world".data(using: .utf8)!
-        // let payload = raw.base64EncodedData()
-
-        // Domyślnie: pokażemy 'test' (możesz zmienić wg. scenariusza)
+    // ✅ przyjmujemy konkretny CBPeripheral – nie używamy opcjonalnego self.peripheral
+    private func writeDemoPayload(on peripheral: CBPeripheral, to ch: CBCharacteristic) {
+        // zmień payload wg potrzeb (test / JSON / base64)
         let payload = Data("test".utf8)
-
         peripheral.writeValue(payload, for: ch, type: .withResponse)
         update("wrote \(payload.count)B to \(ch.uuid.uuidString)")
     }
