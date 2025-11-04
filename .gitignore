@@ -1,0 +1,8 @@
+.DS_Store
+*.xcworkspace
+*.xcuserdata
+*.xcuserstate
+build/
+DerivedData/
+Payload/
+BLEBeaconApp.ipa

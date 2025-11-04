@@ -1,0 +1,47 @@
+name: Build iOS .ipa (unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project BLEBeaconApp.xcodeproj \
+            -scheme BLEBeaconApp \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package .ipa
+        run: |
+          BUILD_DIR=$(xcodebuild -project BLEBeaconApp.xcodeproj -scheme BLEBeaconApp -showBuildSettings | awk '/BUILD_DIR/ {print $3; exit}')
+          APP_PATH="$BUILD_DIR/Release-iphoneos/BLEBeaconApp.app"
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r BLEBeaconApp.ipa Payload
+          ls -la BLEBeaconApp.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-ipa
+          path: BLEBeaconApp.ipa

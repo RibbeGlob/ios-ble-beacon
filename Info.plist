@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>BLEBeaconApp</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+
+    <key>CFBundleName</key>
+    <string>BLEBeaconApp</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <!-- ✅ Launch screen (poprawiona składnia) -->
+    <key>UILaunchScreen</key>
+    <dict/>
+
+    <!-- ✅ Wymagania sprzętowe -->
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+        <string>bluetooth-le</string>
+        <string>location-services</string>
+    </array>
+
+    <!-- ✅ Uprawnienia -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Potrzebujemy Bluetooth, aby łączyć się z urządzeniem.</string>
+
+    <!-- 🔥 iOS 13+ nadal sprawdza ten klucz -->
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>Potrzebujemy Bluetooth, aby komunikować się z BLE.</string>
+
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Potrzebujemy lokalizacji, aby wykrywać iBeacon.</string>
+
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Monitoring iBeacon działa w tle, aby obudzić aplikację.</string>
+
+    <key>NSUserNotificationUsageDescription</key>
+    <string>Powiadomimy Cię, gdy wykryjemy beacon lub połączenie BLE.</string>
+
+    <!-- ✅ Background modes -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-central</string>
+        <string>location</string>
+    </array>
+</dict>
+</plist>
