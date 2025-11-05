@@ -13,20 +13,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Show env
         run: |
-          brew install xcodegen
-          brew install ios-deploy
-
-      - name: Generate Xcode project
-        run: xcodegen generate
-
-      - name: Show Xcode & Swift versions
-        run: |
+          sw_vers
           xcodebuild -version
           swift --version
 
-      - name: Build (unsigned)
+      - name: Install XcodeGen (pinned)
+        run: |
+          brew update
+          brew install xcodegen@2.35
+          brew link --overwrite xcodegen@2.35
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build (unsigned, Release)
         run: |
           xcodebuild \
             -project BLEBeaconApp.xcodeproj \
@@ -40,21 +42,24 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             clean build
 
-      - name: Verify Info.plist contains Bluetooth keys
+      - name: Verify Info.plist contains Bluetooth keys (Release)
         run: |
-          APP_PATH=$(xcodebuild -project BLEBeaconApp.xcodeproj -scheme BLEBeaconApp -showBuildSettings | awk '/TARGET_BUILD_DIR/ {dir=$3} /FULL_PRODUCT_NAME/ {name=$3} END {print dir "/" name}')
-          echo "Checking Info.plist: $APP_PATH/Info.plist"
+          APP_PATH=$(xcodebuild -project BLEBeaconApp.xcodeproj -scheme BLEBeaconApp -configuration Release -showBuildSettings | awk '/TARGET_BUILD_DIR/ {dir=$3} /WRAPPER_NAME/ {name=$3} END {print dir "/" name}')
+          echo "Checking: $APP_PATH/Info.plist"
           plutil -p "$APP_PATH/Info.plist" | grep NSBluetoothAlwaysUsageDescription \
-            || (echo "❌ MISSING BLUETOOTH USAGE KEY IN FINAL APP" && exit 1)
-          echo "✅ Bluetooth privacy key exists"
+            || (echo "❌ Missing NSBluetoothAlwaysUsageDescription in FINAL app" && exit 1)
+          plutil -p "$APP_PATH/Info.plist" | grep NSBluetoothPeripheralUsageDescription \
+            || (echo "❌ Missing NSBluetoothPeripheralUsageDescription in FINAL app" && exit 1)
+          echo "✅ Bluetooth privacy keys exist"
 
-      - name: Create IPA
+      - name: Create IPA (Release)
         run: |
-          APP_PATH=$(xcodebuild -project BLEBeaconApp.xcodeproj -scheme BLEBeaconApp -showBuildSettings | awk '/TARGET_BUILD_DIR/ {dir=$3} /FULL_PRODUCT_NAME/ {name=$3} END {print dir "/" name}')
+          APP_PATH=$(xcodebuild -project BLEBeaconApp.xcodeproj -scheme BLEBeaconApp -configuration Release -showBuildSettings | awk '/TARGET_BUILD_DIR/ {dir=$3} /WRAPPER_NAME/ {name=$3} END {print dir "/" name}')
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
           /usr/bin/zip -qry BLEBeaconApp.ipa Payload
           rm -rf Payload
+          ls -lah BLEBeaconApp.ipa
           echo "✅ IPA built: BLEBeaconApp.ipa"
 
       - name: Upload IPA

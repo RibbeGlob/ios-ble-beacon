@@ -10,8 +10,8 @@ settings:
     CODE_SIGN_STYLE: Manual
     CODE_SIGNING_ALLOWED: NO
     IPHONEOS_DEPLOYMENT_TARGET: 16.0
-    SWIFT_VERSION: 5.10 
-    
+    SWIFT_VERSION: 5.10
+
 targets:
   BLEBeaconApp:
     type: application
@@ -21,20 +21,26 @@ targets:
       - path: Sources
     info:
       path: Info.plist
+      properties:
+        NSBluetoothAlwaysUsageDescription: "Potrzebujemy Bluetooth, aby łączyć się z urządzeniem."
+        NSBluetoothPeripheralUsageDescription: "Potrzebujemy Bluetooth, aby komunikować się z BLE."
+        NSLocationWhenInUseUsageDescription: "Potrzebujemy lokalizacji, aby wykrywać iBeacon."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "Monitoring iBeacon działa w tle, aby obudzić aplikację."
+        NSUserNotificationUsageDescription: "Powiadomimy Cię, gdy wykryjemy beacon lub połączenie BLE."
+        UIBackgroundModes:
+          - bluetooth-central
+          - location
+        UIRequiredDeviceCapabilities:
+          - arm64
+          - bluetooth-le
+          - location-services
+        UILaunchScreen: {}
     entitlements:
       path: Entitlements.plist
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: pl.yourcompany.blebeaconapp
-        DEVELOPMENT_TEAM: ""
-        CODE_SIGN_STYLE: Manual
-        CODE_SIGNING_ALLOWED: NO
-        IPHONEOS_DEPLOYMENT_TARGET: 16.0
-        SWIFT_VERSION: 5.10
-
-        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Potrzebujemy Bluetooth, aby łączyć się z urządzeniem"
-        INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription: "Potrzebujemy Bluetooth, aby komunikować się z BLE"
-
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_BITCODE: NO
     dependencies:
       - sdk: SwiftUI.framework
       - sdk: CoreBluetooth.framework
