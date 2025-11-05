@@ -30,7 +30,7 @@ jobs:
             -scheme BLEBeaconApp \
             -configuration Release \
             -sdk iphoneos \
-            SWIFT_VERSION=5.10 \ # ✅ wymuszenie Swift 5.10
+            SWIFT_VERSION=5.10 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
