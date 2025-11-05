@@ -5,12 +5,13 @@ options:
 
 settings:
   base:
-    PRODUCT_BUNDLE_IDENTIFIER: pl.yourcompany.blebeaconapp   # ← podmień
-    DEVELOPMENT_TEAM: ""                                     # puste – bez podpisu
+    PRODUCT_BUNDLE_IDENTIFIER: pl.yourcompany.blebeaconapp
+    DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Manual
     CODE_SIGNING_ALLOWED: NO
     IPHONEOS_DEPLOYMENT_TARGET: 16.0
-
+    SWIFT_VERSION: 5.10 
+    
 targets:
   BLEBeaconApp:
     type: application
@@ -26,10 +27,10 @@ targets:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_BITCODE: NO
-        SWIFT_VERSION: 5.10
     dependencies:
       - sdk: SwiftUI.framework
       - sdk: CoreBluetooth.framework
       - sdk: CoreLocation.framework
       - sdk: UserNotifications.framework
-
+    scheme:
+      testTargets: []
