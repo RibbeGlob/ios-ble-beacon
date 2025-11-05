@@ -23,10 +23,18 @@ targets:
       path: Info.plist
     entitlements:
       path: Entitlements.plist
-    settings:
-      base:
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ENABLE_BITCODE: NO
+  settings:
+    base:
+      PRODUCT_BUNDLE_IDENTIFIER: pl.yourcompany.blebeaconapp
+      DEVELOPMENT_TEAM: ""
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGNING_ALLOWED: NO
+      IPHONEOS_DEPLOYMENT_TARGET: 16.0
+      SWIFT_VERSION: 5.10
+
+      INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Potrzebujemy Bluetooth, aby łączyć się z urządzeniem"
+      INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription: "Potrzebujemy Bluetooth, aby komunikować się z BLE"
+
     dependencies:
       - sdk: SwiftUI.framework
       - sdk: CoreBluetooth.framework
