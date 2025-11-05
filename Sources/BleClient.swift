@@ -14,7 +14,6 @@ fileprivate func bluetoothAuthString() -> String {
     }
 }
 
-@MainActor
 final class BleClient: NSObject, ObservableObject {
     static let shared = BleClient()
 
@@ -84,7 +83,12 @@ final class BleClient: NSObject, ObservableObject {
 
     // MARK: - Helpers
     private func update(_ text: String) {
-        stateText = text
+        // gwarancja głównego wątku dla Published/UI
+        if Thread.isMainThread {
+            self.stateText = text
+        } else {
+            DispatchQueue.main.async { self.stateText = text }
+        }
         print("[BleClient] \(text)")
     }
 
@@ -104,10 +108,11 @@ final class BleClient: NSObject, ObservableObject {
 }
 
 // MARK: - CBCentralManagerDelegate
+// @preconcurrency opóźnia ścisłe sprawdzanie izolacji (czyściej pod Swift 6)
+@preconcurrency
 extension BleClient: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         update("central=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
-        // Opcjonalnie: jeśli BT włączone i mamy periferium po restore, spróbujmy dokończyć
         if central.state == .poweredOn, let p = peripheral {
             central.connect(p, options: nil)
         }
@@ -149,7 +154,6 @@ extension BleClient: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         update("disconnected")
-        // Reconnect tylko jeśli to nasz docelowy peripheral
         if peripheral.identifier == self.peripheral?.identifier {
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
                 guard let self = self, let p = self.peripheral else { return }
@@ -160,9 +164,10 @@ extension BleClient: CBCentralManagerDelegate {
 }
 
 // MARK: - CBPeripheralDelegate
+@preconcurrency
 extension BleClient: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil else { update("svc err: \(error!.localizedDescription)") ; return }
+        guard error == nil else { update("svc err: \(error!.localizedDescription)"); return }
         guard let services = peripheral.services, !services.isEmpty else { update("no services"); return }
 
         for s in services {
@@ -196,7 +201,6 @@ extension BleClient: CBPeripheralDelegate {
         update("no writable char")
     }
 
-    // Zapis z doborem typu write (with/without response)
     private func writeDemoPayload(on peripheral: CBPeripheral, to ch: CBCharacteristic) {
         let payload = Data("test".utf8)
         let type: CBCharacteristicWriteType =

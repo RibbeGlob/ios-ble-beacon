@@ -26,5 +26,10 @@ targets:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_BITCODE: NO
-    scheme:
-      testTargets: []
+        SWIFT_VERSION: 5.10
+    dependencies:
+      - sdk: SwiftUI.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: CoreLocation.framework
+      - sdk: UserNotifications.framework
+

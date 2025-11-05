@@ -65,8 +65,11 @@ final class BeaconMonitor: NSObject, ObservableObject, CLLocationManagerDelegate
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
         status = "didEnterRegion"
         notify("iBeacon", "Wykryto docelowy beacon. Start krótkiego skanu BLE.")
-        BleClient.shared.shortScanAndConnect()
+        DispatchQueue.main.async {
+            BleClient.shared.shortScanAndConnect()
+        }
     }
+
 
     func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
         status = "didExitRegion"
