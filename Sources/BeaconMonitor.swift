@@ -9,29 +9,33 @@ final class BeaconMonitor: NSObject, ObservableObject, CLLocationManagerDelegate
     private let manager = CLLocationManager()
 
     private let uuid = UUID(uuidString: "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0")!
-    private lazy var region: CLBeaconRegion = {
-        let r = CLBeaconRegion(uuid: uuid, major: 1, minor: 1, identifier: "ibeacon-target")
-        r.notifyOnEntry = true
-        r.notifyOnExit = true
-        r.notifyEntryStateOnDisplay = true
-        return r
-    }()
+    private lazy var region = CLBeaconRegion(uuid: uuid, major: 1, minor: 1, identifier: "ibeacon-target")
 
     func start() {
         manager.delegate = self
+        requestLocalNotificationsIfNeeded()
+        handleAuth(manager.authorizationStatus)
+    }
 
-        switch manager.authorizationStatus {
+    private func handleAuth(_ st: CLAuthorizationStatus) {
+        switch st {
         case .notDetermined:
-            manager.requestWhenInUseAuthorization()       // 1. krok
+            status = "request WhenInUse…"
+            manager.requestWhenInUseAuthorization()
+
         case .authorizedWhenInUse:
-            manager.requestAlwaysAuthorization()           // 2. krok
+            status = "request Always…"
+            manager.requestAlwaysAuthorization()
+
         case .authorizedAlways:
             startMonitoringIfAuthorized()
-        default:
-            status = "location auth not Always"
-        }
 
-        requestLocalNotificationsIfNeeded()
+        case .denied, .restricted:
+            status = "location denied/restricted"
+
+        @unknown default:
+            status = "location unknown"
+        }
     }
 
     private func startMonitoringIfAuthorized() {
@@ -41,7 +45,7 @@ final class BeaconMonitor: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     private func requestLocalNotificationsIfNeeded() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     private func notify(_ title: String, _ body: String) {
@@ -51,15 +55,14 @@ final class BeaconMonitor: NSObject, ObservableObject, CLLocationManagerDelegate
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
     }
 
+    // iOS 14+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        handleAuth(manager.authorizationStatus)
+    }
+
+    // iOS <14 fallback
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        switch status {
-        case .authorizedAlways:
-            startMonitoringIfAuthorized()
-        case .authorizedWhenInUse:
-            manager.requestAlwaysAuthorization()
-        default:
-            self.status = "auth=\(status.rawValue)"
-        }
+        handleAuth(status)
     }
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
@@ -69,7 +72,6 @@ final class BeaconMonitor: NSObject, ObservableObject, CLLocationManagerDelegate
             BleClient.shared.shortScanAndConnect()
         }
     }
-
 
     func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
         status = "didExitRegion"

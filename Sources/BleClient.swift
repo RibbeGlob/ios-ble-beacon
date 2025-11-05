@@ -81,6 +81,10 @@ final class BleClient: NSObject, ObservableObject {
         }
     }
 
+    func requestBluetoothPermissionOnly() {
+        _ = central.state // lazy init + trigger auth prompt jeśli potrzeba
+        update("BT state=\(central.state.rawValue) — auth=\(btAuthStatus)")
+    }
     // MARK: - Helpers
     private func update(_ text: String) {
         // gwarancja głównego wątku dla Published/UI

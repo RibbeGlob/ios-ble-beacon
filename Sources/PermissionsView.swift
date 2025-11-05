@@ -18,15 +18,21 @@ struct PermissionsView: View {
             .buttonStyle(.borderedProminent)
 
             Button("2) Lokalizacja (Always → iBeacon)") {
-                // uruchamia flow WhenInUse -> Always wewnątrz BeaconMonitor
-                beacon.start()
+                BeaconMonitor.shared.start()   // odpali flow WhenInUse → Always
             }
             .buttonStyle(.bordered)
 
-            Button("3) Bluetooth (pokaże prompt przy 1. skanowaniu)") {
-                ble.shortScanAndConnect()
+            Button("3) Bluetooth (tylko prompt)") {
+                BleClient.shared.requestBluetoothPermissionOnly() // ⬅️ zamiast shortScanAndConnect()
             }
             .buttonStyle(.bordered)
+
+            // Dodatkowy przycisk, gdy chcesz faktycznie zacząć skan:
+            Button("4) Krótkie skanowanie BLE") {
+                BleClient.shared.shortScanAndConnect()
+            }
+            .buttonStyle(.borderedProminent)
+
 
             if lpmOn {
                 Text("Masz włączony Tryb niskiego zużycia energii.\nWyłącz w Ustawienia → Bateria dla lepszej pracy w tle.")
