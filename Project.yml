@@ -23,17 +23,17 @@ targets:
       path: Info.plist
     entitlements:
       path: Entitlements.plist
-  settings:
-    base:
-      PRODUCT_BUNDLE_IDENTIFIER: pl.yourcompany.blebeaconapp
-      DEVELOPMENT_TEAM: ""
-      CODE_SIGN_STYLE: Manual
-      CODE_SIGNING_ALLOWED: NO
-      IPHONEOS_DEPLOYMENT_TARGET: 16.0
-      SWIFT_VERSION: 5.10
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pl.yourcompany.blebeaconapp
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: NO
+        IPHONEOS_DEPLOYMENT_TARGET: 16.0
+        SWIFT_VERSION: 5.10
 
-      INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Potrzebujemy Bluetooth, aby łączyć się z urządzeniem"
-      INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription: "Potrzebujemy Bluetooth, aby komunikować się z BLE"
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Potrzebujemy Bluetooth, aby łączyć się z urządzeniem"
+        INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription: "Potrzebujemy Bluetooth, aby komunikować się z BLE"
 
     dependencies:
       - sdk: SwiftUI.framework
