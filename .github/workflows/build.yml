@@ -13,17 +13,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show env
+      - name: Tooling versions
         run: |
           sw_vers
           xcodebuild -version
           swift --version
+          brew --version
 
-      - name: Install XcodeGen (pinned)
+      - name: Install XcodeGen (latest)
         run: |
           brew update
-          brew install xcodegen@2.35
-          brew link --overwrite xcodegen@2.35
+          brew install xcodegen
 
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
@@ -43,6 +43,7 @@ jobs:
             clean build
 
       - name: Verify Info.plist contains Bluetooth keys (Release)
+        shell: bash
         run: |
           APP_PATH=$(xcodebuild -project BLEBeaconApp.xcodeproj -scheme BLEBeaconApp -configuration Release -showBuildSettings | awk '/TARGET_BUILD_DIR/ {dir=$3} /WRAPPER_NAME/ {name=$3} END {print dir "/" name}')
           echo "Checking: $APP_PATH/Info.plist"
@@ -55,12 +56,12 @@ jobs:
       - name: Create IPA (Release)
         run: |
           APP_PATH=$(xcodebuild -project BLEBeaconApp.xcodeproj -scheme BLEBeaconApp -configuration Release -showBuildSettings | awk '/TARGET_BUILD_DIR/ {dir=$3} /WRAPPER_NAME/ {name=$3} END {print dir "/" name}')
+          rm -rf Payload BLEBeaconApp.ipa
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
           /usr/bin/zip -qry BLEBeaconApp.ipa Payload
           rm -rf Payload
           ls -lah BLEBeaconApp.ipa
-          echo "✅ IPA built: BLEBeaconApp.ipa"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
