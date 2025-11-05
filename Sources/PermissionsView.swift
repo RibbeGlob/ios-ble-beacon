@@ -3,6 +3,7 @@ import SwiftUI
 import CoreLocation
 import CoreBluetooth
 import UserNotifications
+import UIKit 
 
 struct PermissionsView: View {
     @State private var lpmOn = ProcessInfo.processInfo.isLowPowerModeEnabled

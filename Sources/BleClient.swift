@@ -1,16 +1,17 @@
+// Sources/BleClient.swift
 import Foundation
 import CoreBluetooth
 import UserNotifications
 
-// Helper do czytelnego statusu autoryzacji BT (iOS 13+)
+// Czytelny status autoryzacji BT (iOS 13+)
 @available(iOS 13.0, *)
 fileprivate func bluetoothAuthString() -> String {
     switch CBManager.authorization {
     case .allowedAlways: return "allowed"
-    case .denied:         return "denied"
-    case .restricted:     return "restricted"
-    case .notDetermined:  return "notDetermined"
-    @unknown default:     return "unknown"
+    case .denied:        return "denied"
+    case .restricted:    return "restricted"
+    case .notDetermined: return "notDetermined"
+    @unknown default:    return "unknown"
     }
 }
 
@@ -19,9 +20,14 @@ final class BleClient: NSObject, ObservableObject {
 
     @Published var stateText = "idle"
 
-    // --- LAZY central (powstaje dopiero przy pierwszym użyciu) ---
-    private lazy var central: CBCentralManager = {
-        CBCentralManager(
+    // Leniwa inicjalizacja – zabezpieczona przed crashem, gdy brak klucza w Info.plist
+    private lazy var central: CBCentralManager? = {
+        guard hasBluetoothUsageKey() else {
+            update("Missing NSBluetoothAlwaysUsageDescription in Info.plist")
+            notify("Bluetooth", "Brak klucza NSBluetoothAlwaysUsageDescription w Info.plist.")
+            return nil
+        }
+        return CBCentralManager(
             delegate: self,
             queue: .main,
             options: [
@@ -49,15 +55,27 @@ final class BleClient: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        // Uwaga: nie twórz tutaj central – jest lazy
+        // central tworzymy leniwie (patrz wyżej)
         requestLocalNotificationsIfNeeded()
     }
 
     // MARK: - Public
+
+    /// Delikatna inicjalizacja – tylko wywołuje prompt systemowy, bez skanowania
+    func requestBluetoothPermissionOnly() {
+        guard let c = central else { return } // brak klucza → nic nie rób
+        _ = c.state // trigger init/prompt jeśli potrzeba
+        update("BT state=\(c.state.rawValue) — auth=\(btAuthStatus)")
+    }
+
+    /// Krótkie skanowanie i szybki connect do urządzenia z usługą targetService
     func shortScanAndConnect() {
-        // Odwołanie do 'central' zainicjuje go, jeśli trzeba
-        guard central.state == .poweredOn else {
-            update("BT off (\(central.state.rawValue)) — auth=\(btAuthStatus)")
+        guard let c = central else {
+            update("central=nil (brak klucza BT usage?)")
+            return
+        }
+        guard c.state == .poweredOn else {
+            update("BT off (\(c.state.rawValue)) — auth=\(btAuthStatus)")
             return
         }
         guard !isScanning else { return }
@@ -68,26 +86,28 @@ final class BleClient: NSObject, ObservableObject {
 
         isScanning = true
         update("scanning \(targetService.uuidString)…")
-        central.scanForPeripherals(
+        c.scanForPeripherals(
             withServices: [targetService],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + scanWindow) { [weak self] in
-            guard let self = self else { return }
-            self.central.stopScan()
+            guard let self = self, let c = self.central else { return }
+            c.stopScan()
             self.isScanning = false
             if self.peripheral == nil { self.update("no device found") }
         }
     }
 
-    func requestBluetoothPermissionOnly() {
-        _ = central.state // lazy init + trigger auth prompt jeśli potrzeba
-        update("BT state=\(central.state.rawValue) — auth=\(btAuthStatus)")
-    }
     // MARK: - Helpers
+
+    private func hasBluetoothUsageKey() -> Bool {
+        guard let v = Bundle.main.object(forInfoDictionaryKey: "NSBluetoothAlwaysUsageDescription") as? String
+        else { return false }
+        return !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private func update(_ text: String) {
-        // gwarancja głównego wątku dla Published/UI
         if Thread.isMainThread {
             self.stateText = text
         } else {
@@ -115,6 +135,7 @@ final class BleClient: NSObject, ObservableObject {
 extension BleClient: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         update("central=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
+        // Jeśli mieliśmy zapamiętany peripheral i BT się włączył – spróbuj połączyć
         if central.state == .poweredOn, let p = peripheral {
             central.connect(p, options: nil)
         }
@@ -156,6 +177,7 @@ extension BleClient: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         update("disconnected")
+        // Opcjonalny auto-reconnect tylko do tego samego urządzenia
         if peripheral.identifier == self.peripheral?.identifier {
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
                 guard let self = self, let p = self.peripheral else { return }
@@ -166,7 +188,6 @@ extension BleClient: CBCentralManagerDelegate {
 }
 
 // MARK: - CBPeripheralDelegate
-
 extension BleClient: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard error == nil else { update("svc err: \(error!.localizedDescription)"); return }
