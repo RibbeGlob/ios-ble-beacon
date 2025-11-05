@@ -1,3 +1,5 @@
+import SwiftUI
+
 struct ContentView: View {
     @StateObject private var beacon = BeaconMonitor.shared
     @StateObject private var ble = BleClient.shared

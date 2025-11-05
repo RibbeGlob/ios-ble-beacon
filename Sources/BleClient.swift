@@ -108,7 +108,6 @@ final class BleClient: NSObject, ObservableObject {
 }
 
 // MARK: - CBCentralManagerDelegate
-// @preconcurrency opóźnia ścisłe sprawdzanie izolacji (czyściej pod Swift 6)
 extension BleClient: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         update("central=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
