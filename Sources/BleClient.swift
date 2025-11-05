@@ -2,13 +2,42 @@ import Foundation
 import CoreBluetooth
 import UserNotifications
 
+// Helper do czytelnego statusu autoryzacji BT (iOS 13+)
+@available(iOS 13.0, *)
+fileprivate func bluetoothAuthString() -> String {
+    switch CBManager.authorization {
+    case .allowedAlways: return "allowed"
+    case .denied:         return "denied"
+    case .restricted:     return "restricted"
+    case .notDetermined:  return "notDetermined"
+    @unknown default:     return "unknown"
+    }
+}
+
+@MainActor
 final class BleClient: NSObject, ObservableObject {
     static let shared = BleClient()
 
     @Published var stateText = "idle"
 
-    private var central: CBCentralManager!
+    // --- LAZY central (powstaje dopiero przy pierwszym użyciu) ---
+    private lazy var central: CBCentralManager = {
+        CBCentralManager(
+            delegate: self,
+            queue: .main,
+            options: [
+                CBCentralManagerOptionShowPowerAlertKey: true,
+                CBCentralManagerOptionRestoreIdentifierKey: "pl.yourcompany.ble.central"
+            ]
+        )
+    }()
+
     private var peripheral: CBPeripheral?
+
+    var btAuthStatus: String {
+        if #available(iOS 13.0, *) { return bluetoothAuthString() }
+        return "n/a"
+    }
 
     // Service FFF0 + preferowana char FFF1 (przykładowo)
     private let targetService = CBUUID(string: "0000FFF0-0000-1000-8000-00805F9B34FB")
@@ -21,22 +50,15 @@ final class BleClient: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        central = CBCentralManager(
-            delegate: self,
-            queue: .main,
-            options: [
-                CBCentralManagerOptionShowPowerAlertKey: true,
-                // ✅ poprawna stała restore identifier:
-                CBCentralManagerOptionRestoreIdentifierKey: "pl.yourcompany.ble.central"
-            ]
-        )
+        // Uwaga: nie twórz tutaj central – jest lazy
         requestLocalNotificationsIfNeeded()
     }
 
     // MARK: - Public
     func shortScanAndConnect() {
+        // Odwołanie do 'central' zainicjuje go, jeśli trzeba
         guard central.state == .poweredOn else {
-            update("BT off (\(central.state.rawValue))")
+            update("BT off (\(central.state.rawValue)) — auth=\(btAuthStatus)")
             return
         }
         guard !isScanning else { return }
@@ -47,11 +69,13 @@ final class BleClient: NSObject, ObservableObject {
 
         isScanning = true
         update("scanning \(targetService.uuidString)…")
-        central.scanForPeripherals(withServices: [targetService],
-                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        central.scanForPeripherals(
+            withServices: [targetService],
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
+        )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + scanWindow) { [weak self] in
-            guard let self else { return }
+            guard let self = self else { return }
             self.central.stopScan()
             self.isScanning = false
             if self.peripheral == nil { self.update("no device found") }
@@ -68,18 +92,25 @@ final class BleClient: NSObject, ObservableObject {
         let c = UNMutableNotificationContent()
         c.title = title
         c.body = body
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil)
+        )
     }
 
     private func requestLocalNotificationsIfNeeded() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 }
 
 // MARK: - CBCentralManagerDelegate
 extension BleClient: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        update("central=\(central.state.rawValue)")
+        update("central=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
+        // Opcjonalnie: jeśli BT włączone i mamy periferium po restore, spróbujmy dokończyć
+        if central.state == .poweredOn, let p = peripheral {
+            central.connect(p, options: nil)
+        }
     }
 
     func centralManager(_ central: CBCentralManager, willRestoreState dict: [String : Any]) {
@@ -118,9 +149,12 @@ extension BleClient: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         update("disconnected")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-            guard let self else { return }
-            if let p = self.peripheral { central.connect(p, options: nil) }
+        // Reconnect tylko jeśli to nasz docelowy peripheral
+        if peripheral.identifier == self.peripheral?.identifier {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                guard let self = self, let p = self.peripheral else { return }
+                central.connect(p, options: nil)
+            }
         }
     }
 }
@@ -128,7 +162,7 @@ extension BleClient: CBCentralManagerDelegate {
 // MARK: - CBPeripheralDelegate
 extension BleClient: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil else { update("svc err"); return }
+        guard error == nil else { update("svc err: \(error!.localizedDescription)") ; return }
         guard let services = peripheral.services, !services.isEmpty else { update("no services"); return }
 
         for s in services {
@@ -142,7 +176,7 @@ extension BleClient: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral,
                     didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
-        guard error == nil else { update("char err"); return }
+        guard error == nil else { update("char err: \(error!.localizedDescription)"); return }
         guard let chars = service.characteristics, !chars.isEmpty else { update("no chars"); return }
 
         for ch in chars {
@@ -150,24 +184,26 @@ extension BleClient: CBPeripheralDelegate {
         }
 
         if let ch = chars.first(where: { $0.uuid == preferredTargetChar }) {
-            writeDemoPayload(on: peripheral, to: ch)   // ✅ przekazujemy bieżący peripheral
+            writeDemoPayload(on: peripheral, to: ch)
             return
         }
 
         if let writable = chars.first(where: { $0.properties.contains(.write) || $0.properties.contains(.writeWithoutResponse) }) {
-            writeDemoPayload(on: peripheral, to: writable)  // ✅ j.w.
+            writeDemoPayload(on: peripheral, to: writable)
             return
         }
 
         update("no writable char")
     }
 
-    // ✅ przyjmujemy konkretny CBPeripheral – nie używamy opcjonalnego self.peripheral
+    // Zapis z doborem typu write (with/without response)
     private func writeDemoPayload(on peripheral: CBPeripheral, to ch: CBCharacteristic) {
-        // zmień payload wg potrzeb (test / JSON / base64)
         let payload = Data("test".utf8)
-        peripheral.writeValue(payload, for: ch, type: .withResponse)
-        update("wrote \(payload.count)B to \(ch.uuid.uuidString)")
+        let type: CBCharacteristicWriteType =
+            ch.properties.contains(.write) ? .withResponse : .withoutResponse
+
+        peripheral.writeValue(payload, for: ch, type: type)
+        update("wrote \(payload.count)B to \(ch.uuid.uuidString) (\(type == .withResponse ? "withResp" : "withoutResp"))")
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {

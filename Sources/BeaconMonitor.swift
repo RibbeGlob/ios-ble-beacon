@@ -9,18 +9,28 @@ final class BeaconMonitor: NSObject, ObservableObject, CLLocationManagerDelegate
     private let manager = CLLocationManager()
 
     private let uuid = UUID(uuidString: "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0")!
-    private lazy var region = CLBeaconRegion(uuid: uuid, major: 1, minor: 1, identifier: "ibeacon-target")
+    private lazy var region: CLBeaconRegion = {
+        let r = CLBeaconRegion(uuid: uuid, major: 1, minor: 1, identifier: "ibeacon-target")
+        r.notifyOnEntry = true
+        r.notifyOnExit = true
+        r.notifyEntryStateOnDisplay = true
+        return r
+    }()
 
     func start() {
         manager.delegate = self
-        // ✅ bez deprecated API
-        if manager.authorizationStatus == .notDetermined {
-            manager.requestAlwaysAuthorization()
-        } else if manager.authorizationStatus == .authorizedAlways {
+
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            manager.requestWhenInUseAuthorization()       // 1. krok
+        case .authorizedWhenInUse:
+            manager.requestAlwaysAuthorization()           // 2. krok
+        case .authorizedAlways:
             startMonitoringIfAuthorized()
-        } else {
+        default:
             status = "location auth not Always"
         }
+
         requestLocalNotificationsIfNeeded()
     }
 
@@ -31,7 +41,7 @@ final class BeaconMonitor: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     private func requestLocalNotificationsIfNeeded() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     private func notify(_ title: String, _ body: String) {
@@ -42,8 +52,14 @@ final class BeaconMonitor: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        if status == .authorizedAlways { startMonitoringIfAuthorized() }
-        else { self.status = "auth=\(status.rawValue)" }
+        switch status {
+        case .authorizedAlways:
+            startMonitoringIfAuthorized()
+        case .authorizedWhenInUse:
+            manager.requestAlwaysAuthorization()
+        default:
+            self.status = "auth=\(status.rawValue)"
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
