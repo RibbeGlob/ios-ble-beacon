@@ -31,11 +31,11 @@
 
     <!-- ✅ Uprawnienia -->
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>Potrzebujemy Bluetooth, aby łączyć się z urządzeniem.</string>
+    <string>Aplikacja potrzebuje dostępu do Bluetooth w celu połączenia z urządzeniami.</string>
 
     <!-- 🔥 iOS 13+ nadal sprawdza ten klucz -->
     <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>Potrzebujemy Bluetooth, aby komunikować się z BLE.</string>
+    <string>Bluetooth jest wymagany do komunikacji z urządzeniami.</string>
 
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Potrzebujemy lokalizacji, aby wykrywać iBeacon.</string>
