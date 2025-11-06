@@ -1,3 +1,19 @@
+//
+//  BeaconMonitor.swift
+//
+//  Sterowanie monitoringiem iBeacon i wyzwalanie zapisu "test"
+//  do charakterystyki 0x5678 w serwisie 0x1234 po wejściu w region.
+//
+//  Upewnij się, że w projekcie masz włączone Background Modes:
+//  - Location updates
+//  - Uses Bluetooth LE accessories (bluetooth-central)
+//
+//  Oraz klucze w Info.plist:
+//  - NSLocationWhenInUseUsageDescription
+//  - NSLocationAlwaysAndWhenInUseUsageDescription
+//  - NSBluetoothAlwaysUsageDescription
+//
+
 import Foundation
 import CoreLocation
 import UserNotifications
@@ -6,7 +22,7 @@ import UIKit
 final class BeaconMonitor: NSObject, ObservableObject {
     static let shared = BeaconMonitor()
 
-    @Published var status = "idle"
+    @Published var status: String = "idle"
 
     private let manager = CLLocationManager()
 
@@ -19,24 +35,46 @@ final class BeaconMonitor: NSObject, ObservableObject {
         identifier: "ibeacon-target"
     )
 
+    // MARK: - Public API
+
+    /// Rozpocznij proces autoryzacji i monitoring iBeacon.
     func start() {
         manager.delegate = self
+        requestNotificationPermissionIfNeeded()
+
+        guard CLLocationManager.locationServicesEnabled() else {
+            update("location services disabled — włącz w Ustawieniach")
+            return
+        }
 
         switch manager.authorizationStatus {
         case .notDetermined:
             manager.requestWhenInUseAuthorization()
-            status = "request WhenInUse"
+            update("request WhenInUse")
         case .authorizedWhenInUse:
             manager.requestAlwaysAuthorization()
-            status = "request Always"
+            update("request Always")
         case .authorizedAlways:
             startMonitoring()
         case .denied, .restricted:
-            status = "location denied/restricted — otwórz Ustawienia"
+            update("location denied/restricted — otwórz Ustawienia")
         @unknown default:
-            status = "location unknown"
+            update("location unknown")
         }
     }
+
+    /// Zatrzymaj monitoring (opcjonalnie).
+    func stop() {
+        manager.stopMonitoring(for: region)
+        update("stopped monitoring \(region.identifier)")
+    }
+
+    /// Ręczne odświeżenie stanu wejścia/wyjścia (np. po starcie).
+    func refreshState() {
+        manager.requestState(for: region)
+    }
+
+    // MARK: - Private
 
     private func startMonitoring() {
         region.notifyOnEntry = true
@@ -46,8 +84,12 @@ final class BeaconMonitor: NSObject, ObservableObject {
         manager.startMonitoring(for: region)
         manager.requestState(for: region)
 
-        status = "monitoring \(region.identifier)"
+        update("monitoring \(region.identifier)")
         print("[BeaconMonitor] Monitoring started")
+    }
+
+    private func requestNotificationPermissionIfNeeded() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     private func notify(_ title: String, _ body: String) {
@@ -58,8 +100,18 @@ final class BeaconMonitor: NSObject, ObservableObject {
             UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil)
         )
     }
+
+    private func update(_ text: String) {
+        if Thread.isMainThread {
+            self.status = text
+        } else {
+            DispatchQueue.main.async { self.status = text }
+        }
+        print("[BeaconMonitor] \(text)")
+    }
 }
 
+// MARK: - CLLocationManagerDelegate
 extension BeaconMonitor: CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
@@ -69,32 +121,41 @@ extension BeaconMonitor: CLLocationManagerDelegate {
                 self.startMonitoring()
             case .authorizedWhenInUse:
                 manager.requestAlwaysAuthorization()
-                self.status = "request Always"
+                self.update("request Always")
             case .denied, .restricted:
-                self.status = "location denied/restricted"
+                self.update("location denied/restricted")
             case .notDetermined:
-                self.status = "request WhenInUse"
+                self.update("request WhenInUse")
             @unknown default:
-                self.status = "auth unknown"
+                self.update("auth unknown")
             }
         }
     }
 
+    func locationManager(_ manager: CLLocationManager, didStartMonitoringFor region: CLRegion) {
+        // Po starcie monitoringu poproś od razu o stan.
+        manager.requestState(for: region)
+    }
+
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
         guard region.identifier == self.region.identifier else { return }
-        DispatchQueue.main.async { self.status = "didEnterRegion" }
+        update("didEnterRegion")
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
+        // WYZWALACZ: po wejściu w region uruchom BLE-łączność i zapisz "test"
+        // BleClient ma skonfigurowany service 0x1234 i char 0x5678.
         BleClient.shared.writeAfterRegionEnter(valueToWrite: Data("test".utf8))
     }
 
     func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
         guard region.identifier == self.region.identifier else { return }
-        DispatchQueue.main.async { self.status = "didExitRegion" }
+        update("didExitRegion")
         notify("iBeacon", "Opuściliśmy zasięg beacona")
     }
 
-    func locationManager(_ manager: CLLocationManager, didDetermineState state: CLRegionState, for region: CLRegion) {
+    func locationManager(_ manager: CLLocationManager,
+                         didDetermineState state: CLRegionState,
+                         for region: CLRegion) {
         let txt: String = {
             switch state {
             case .inside:  return "state: inside"
@@ -103,10 +164,16 @@ extension BeaconMonitor: CLLocationManagerDelegate {
             @unknown default: return "state: ?"
             }
         }()
-        DispatchQueue.main.async { self.status = txt }
+        update(txt)
     }
 
-    func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
-        DispatchQueue.main.async { self.status = "monitoring fail: \(error.localizedDescription)" }
+    func locationManager(_ manager: CLLocationManager,
+                         monitoringDidFailFor region: CLRegion?,
+                         withError error: Error) {
+        update("monitoring fail: \(error.localizedDescription)")
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        update("location error: \(error.localizedDescription)")
     }
 }

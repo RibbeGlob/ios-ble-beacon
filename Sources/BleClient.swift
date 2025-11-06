@@ -1,3 +1,15 @@
+//
+//  BleClient.swift
+//
+//  Skanuje urządzenie z usługą 0x1234, łączy i zapisuje "test" do char 0x5678.
+//  Działa również jako krótka akcja po wejściu w region iBeacon (patrz BeaconMonitor).
+//
+//  Wymagania projektu (Capabilities / Info.plist):
+//  - Background Modes: Uses Bluetooth LE accessories (bluetooth-central)
+//  - (dla iBeacon) Background Modes: Location updates
+//  - Info.plist: NSBluetoothAlwaysUsageDescription (+ lokalne powiadomienia, jeśli używasz notify())
+//
+
 import Foundation
 import CoreBluetooth
 import UserNotifications
@@ -20,7 +32,14 @@ final class BleClient: NSObject, ObservableObject {
 
     @Published var stateText = "idle"
 
-    // Leniwa inicjalizacja – broni przed crashem, jeśli brak usage key w Info.plist
+    // MARK: - Konfiguracja „Twojego” urządzenia
+    // (podmień jeśli potrzebujesz inne UUID-y)
+    private let targetService       = CBUUID(string: "1234")
+    private let preferredTargetChar = CBUUID(string: "5678")
+
+    // MARK: - Stan CoreBluetooth
+
+    // Leniwa inicjalizacja – chroni przed crashem, jeśli brak usage key w Info.plist
     private lazy var central: CBCentralManager? = {
         guard hasBluetoothUsageKey() else {
             update("Missing NSBluetoothAlwaysUsageDescription in Info.plist")
@@ -32,6 +51,7 @@ final class BleClient: NSObject, ObservableObject {
             queue: .main,
             options: [
                 CBCentralManagerOptionShowPowerAlertKey: true,
+                // Wspiera State Preservation & Restoration
                 CBCentralManagerOptionRestoreIdentifierKey: "pl.yourcompany.ble.central"
             ]
         )
@@ -39,22 +59,23 @@ final class BleClient: NSObject, ObservableObject {
 
     private var peripheral: CBPeripheral?
 
-    var btAuthStatus: String {
-        if #available(iOS 13.0, *) { return bluetoothAuthString() }
-        return "n/a"
-    }
+    // Ostatnio znany identyfikator peryferium (lokalny dla iOS)
+    private let lastPeripheralKey = "LastPeripheralUUID"
 
-    // PRZYKŁADOWE: service/char do własnego urządzenia
-    // (podmień na swoje — np. 0x1234 / 0x5678)
-    private let targetService       = CBUUID(string: "1234")
-    private let preferredTargetChar = CBUUID(string: "5678")
+    // Operacyjne
     private var isScanning = false
     private let scanWindow: TimeInterval = 6.0
     private var lastConnectAttempt: Date = .distantPast
     private let connectCooldown: TimeInterval = 15.0
+    private var pendingWriteValue: Data?
 
-    // (opcjonalnie) krótkie działania w tle
+    // (opcjonalnie) Krótkie działania w tle podczas „ibeacon-write”
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
+
+    var btAuthStatus: String {
+        if #available(iOS 13.0, *) { return bluetoothAuthString() }
+        return "n/a"
+    }
 
     override init() {
         super.init()
@@ -70,7 +91,7 @@ final class BleClient: NSObject, ObservableObject {
         update("BT state=\(c.state.rawValue) — auth=\(btAuthStatus)")
     }
 
-    /// Krótkie skanowanie i szybkie łączenie do urządzenia z usługą `targetService`
+    /// Krótki „manualny” skan i połączenie do urządzenia z usługą `targetService`
     func shortScanAndConnect() {
         guard let c = central else {
             update("central=nil (brak klucza BT usage?)")
@@ -85,37 +106,66 @@ final class BleClient: NSObject, ObservableObject {
             update("cooldown…")
             return
         }
-
-        isScanning = true
-        update("scanning \(targetService.uuidString)…")
-        c.scanForPeripherals(
-            withServices: [targetService],
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
-        )
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + scanWindow) { [weak self] in
-            guard let self = self, let c = self.central else { return }
-            c.stopScan()
-            self.isScanning = false
-            if self.peripheral == nil { self.update("no device found") }
-        }
+        beginScan(with: [targetService])
     }
 
-    /// (opcjonalnie) wywołanie po wejściu w region iBeacon – uruchamia skan i zapis
+    /// Wyzwalane po wejściu w region iBeacon – spróbuj szybko zapisać `valueToWrite`
+    /// do charakterystyki 0x5678 (w serwisie 0x1234).
     func writeAfterRegionEnter(valueToWrite: Data) {
-        _ = central?.state
+        _ = central?.state  // wymuś inicjalizację
         guard let c = central, c.state == .poweredOn else {
             update("BT nieaktywne lub central=nil")
             return
         }
         pendingWriteValue = valueToWrite
         beginBGTask(named: "ibeacon-write")
-        startScanForTargetService()
+        // 1) Jeśli mamy zapamiętany CBPeripheral.identifier – spróbuj bez skanu
+        if let known = retrieveKnownPeripheral() {
+            update("connect known peripheral…")
+            self.peripheral = known
+            c.connect(known, options: nil)
+            return
+        }
+        // 2) Jeśli urządzenie już jest połączone (np. przez system) – wykorzystaj
+        if let connected = c.retrieveConnectedPeripherals(withServices: [targetService]).first {
+            update("use connected peripheral")
+            self.peripheral = connected
+            // Jesteśmy połączeni, rusz z discoverServices
+            connected.delegate = self
+            connected.discoverServices([targetService])
+            return
+        }
+        // 3) Fallback – krótki skan po usłudze
+        beginScan(with: [targetService])
     }
 
     // MARK: - Private helpers
 
-    private var pendingWriteValue: Data?
+    private func beginScan(with services: [CBUUID]?) {
+        guard let c = central, !isScanning else { return }
+        isScanning = true
+        lastConnectAttempt = Date()
+        update("scan \(services?.map{$0.uuidString}.joined(separator: ",") ?? "any")…")
+        c.scanForPeripherals(
+            withServices: services,
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
+        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + scanWindow) { [weak self] in
+            self?.stopScanIfAny(reason: "timeout")
+            // Jeśli skan nic nie znalazł, pozwól BG taskowi dobiec końca naturalnie
+        }
+    }
+
+    private func retrieveKnownPeripheral() -> CBPeripheral? {
+        guard let c = central else { return nil }
+        guard let uuidStr = UserDefaults.standard.string(forKey: lastPeripheralKey),
+              let uuid = UUID(uuidString: uuidStr) else { return nil }
+        return c.retrievePeripherals(withIdentifiers: [uuid]).first
+    }
+
+    private func persistPeripheralIdentifier(_ p: CBPeripheral) {
+        UserDefaults.standard.setValue(p.identifier.uuidString, forKey: lastPeripheralKey)
+    }
 
     private func hasBluetoothUsageKey() -> Bool {
         guard let v = Bundle.main.object(forInfoDictionaryKey: "NSBluetoothAlwaysUsageDescription") as? String
@@ -161,17 +211,6 @@ final class BleClient: NSObject, ObservableObject {
         }
     }
 
-    private func startScanForTargetService() {
-        guard let c = central, !isScanning else { return }
-        isScanning = true
-        update("scan svc \(targetService.uuidString)…")
-        c.scanForPeripherals(withServices: [targetService],
-                             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-            self?.stopScanIfAny(reason: "timeout")
-        }
-    }
-
     private func stopScanIfAny(reason: String) {
         guard let c = central, isScanning else { return }
         c.stopScan()
@@ -184,6 +223,7 @@ final class BleClient: NSObject, ObservableObject {
 extension BleClient: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         update("central=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
+        // Jeśli central jest ON i mamy obiekt peryferium (np. po restore), spróbuj połączyć
         if central.state == .poweredOn, let p = peripheral {
             central.connect(p, options: nil)
         }
@@ -195,6 +235,14 @@ extension BleClient: CBCentralManagerDelegate {
             self.peripheral = restored
             self.peripheral?.delegate = self
             update("restored peripheral")
+            // Jeśli była w toku operacja zapisu – dokończ
+            if let p = self.peripheral {
+                if p.state == .connected {
+                    p.discoverServices([targetService])
+                } else {
+                    central.connect(p, options: nil)
+                }
+            }
         }
     }
 
@@ -212,11 +260,11 @@ extension BleClient: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         update("connected")
         notify("BLE", "Połączono z \(peripheral.name ?? "urządzeniem")")
+        persistPeripheralIdentifier(peripheral)
         peripheral.delegate = self
         // Najpierw spróbuj tylko targetService...
         peripheral.discoverServices([targetService])
     }
-
 
     func centralManager(_ central: CBCentralManager,
                         didFailToConnect peripheral: CBPeripheral,
@@ -243,11 +291,10 @@ extension BleClient: CBCentralManagerDelegate {
 // MARK: - CBPeripheralDelegate
 extension BleClient: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil else { update("svc err: \(error!.localizedDescription)"); return }
+        guard error == nil else { update("svc err: \(error!.localizedDescription)"); endBGTaskIfAny(); return }
         guard let services = peripheral.services, !services.isEmpty else {
             update("no services; retry all")
-            // Fallback: spróbuj odkryć wszystkie serwisy
-            peripheral.discoverServices(nil)
+            peripheral.discoverServices(nil) // Fallback: odkryj wszystkie
             return
         }
 
@@ -260,23 +307,20 @@ extension BleClient: CBPeripheralDelegate {
             }
         }
 
-        // jeśli nie znaleziono targetService, spróbuj „pierwszego lepszego” serwisu 16-bit 0x1234
+        // jeśli nie znaleziono targetService, spróbuj „pierwszego lepszego”
         if !hit, let s = services.first(where: { $0.uuid == targetService }) {
             peripheral.discoverCharacteristics(nil, for: s)
-        } else if !hit {
-            // ostateczny fallback: wybierz serwis z flagami „jak nasz” (często 16-bitowe)
-            if let any = services.first {
-                update("target svc not found, try \(any.uuid.uuidString)")
-                peripheral.discoverCharacteristics(nil, for: any)
-            }
+        } else if !hit, let any = services.first {
+            update("target svc not found, try \(any.uuid.uuidString)")
+            peripheral.discoverCharacteristics(nil, for: any)
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral,
                     didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
-        guard error == nil else { update("char err: \(error!.localizedDescription)"); return }
-        guard let chars = service.characteristics, !chars.isEmpty else { update("no chars"); return }
+        guard error == nil else { update("char err: \(error!.localizedDescription)"); endBGTaskIfAny(); return }
+        guard let chars = service.characteristics, !chars.isEmpty else { update("no chars"); endBGTaskIfAny(); return }
 
         for ch in chars {
             print("[BleClient] char:", ch.uuid.uuidString, "props:", ch.properties)
@@ -284,37 +328,29 @@ extension BleClient: CBPeripheralDelegate {
 
         // 1) preferowana 0x5678
         if let ch = chars.first(where: { $0.uuid == preferredTargetChar }) {
-            writeTest(on: peripheral, to: ch); return
+            writePayload(on: peripheral, to: ch); return
         }
         // 2) jakakolwiek zapisywalna
         if let writable = chars.first(where: { $0.properties.contains(.write) || $0.properties.contains(.writeWithoutResponse) }) {
-            writeTest(on: peripheral, to: writable); return
+            writePayload(on: peripheral, to: writable); return
         }
         update("no writable char")
+        endBGTaskIfAny()
     }
 
-
-    private func writeTest(on peripheral: CBPeripheral, to ch: CBCharacteristic) {
-        let payload = Data("test".utf8)
+    private func writePayload(on peripheral: CBPeripheral, to ch: CBCharacteristic) {
+        let payload = pendingWriteValue ?? Data("test".utf8) // domyślnie „test”
         let type: CBCharacteristicWriteType =
             ch.properties.contains(.write) ? .withResponse : .withoutResponse
 
         peripheral.writeValue(payload, for: ch, type: type)
-        update("write 'test' to \(ch.uuid.uuidString) (\(type == .withResponse ? "withResp" : "withoutResp"))")
-    }
+        update("write \(payload.count)B to \(ch.uuid.uuidString) (\(type == .withResponse ? "withResp" : "withoutResp"))")
 
-    private func writeDemoPayload(on peripheral: CBPeripheral, to ch: CBCharacteristic) {
-        // PODMIEŃ payload na własny – tu tylko przykład
-        let payload = Data("test".utf8)
-        let type: CBCharacteristicWriteType =
-            ch.properties.contains(.write) ? .withResponse : .withoutResponse
-
-        peripheral.writeValue(payload, for: ch, type: type)
-        update("wrote \(payload.count)B to \(ch.uuid.uuidString) (\(type == .withResponse ? "withResp" : "withoutResp"))")
-
+        // Jeśli bez odpowiedzi – nie dostaniemy callbacku didWriteValueFor
         if type == .withoutResponse {
-            // brak callbacku — zamknij BG task po krótkiej chwili
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.notify("BLE", "Write (no resp) na \(ch.uuid.uuidString)")
+                self?.pendingWriteValue = nil
                 self?.endBGTaskIfAny()
             }
         }
@@ -329,6 +365,7 @@ extension BleClient: CBPeripheralDelegate {
             update("write OK on \(characteristic.uuid.uuidString)")
             notify("BLE", "Write OK na \(characteristic.uuid.uuidString)")
         }
+        pendingWriteValue = nil
         endBGTaskIfAny()
     }
 }
