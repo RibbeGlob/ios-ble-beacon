@@ -46,9 +46,8 @@ final class BleClient: NSObject, ObservableObject {
 
     // PRZYKŁADOWE: service/char do własnego urządzenia
     // (podmień na swoje — np. 0x1234 / 0x5678)
-    private let targetService       = CBUUID(string: "0000FFF0-0000-1000-8000-00805F9B34FB")
-    private let preferredTargetChar = CBUUID(string: "0000FFF1-0000-1000-8000-00805F9B34FB")
-
+    private let targetService       = CBUUID(string: "1234")
+    private let preferredTargetChar = CBUUID(string: "5678")
     private var isScanning = false
     private let scanWindow: TimeInterval = 6.0
     private var lastConnectAttempt: Date = .distantPast

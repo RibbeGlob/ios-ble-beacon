@@ -85,8 +85,7 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         DispatchQueue.main.async { self.status = "didEnterRegion" }
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
-        // Jeśli chcesz po wejściu zrobić BLE write, odkomentuj i uzupełnij:
-        // BleClient.shared.writeAfterRegionEnter(valueToWrite: Data([0x01, 0x02, 0x03]))
+        BleClient.shared.writeAfterRegionEnter(valueToWrite: Data("test".utf8))
     }
 
     func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
