@@ -1,20 +1,3 @@
-//
-//  BeaconMonitor.swift
-//
-//  Sterowanie monitoringiem iBeacon i wyzwalanie zapisu "test"
-//  do charakterystyki 0x5678 w serwisie 0x1234 po wejściu w region.
-//
-//  Wymagania (Capabilities):
-//  - Background Modes:
-//      - Location updates
-//      - Uses Bluetooth LE accessories (bluetooth-central)
-//
-//  W Info.plist:
-//  - NSLocationWhenInUseUsageDescription
-//  - NSLocationAlwaysAndWhenInUseUsageDescription
-//  - NSBluetoothAlwaysUsageDescription
-//
-
 import Foundation
 import CoreLocation
 import UserNotifications
@@ -27,7 +10,7 @@ final class BeaconMonitor: NSObject, ObservableObject {
 
     private let manager = CLLocationManager()
 
-    // USTAW: UUID/major/minor zgodnie z konfiguracją Twojego iBeacona
+    // Ustaw zgodnie z konfiguracją iBeacon w urządzeniu
     private let uuid = UUID(uuidString: "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0")!
     private lazy var region = CLBeaconRegion(
         uuid: uuid,
@@ -38,7 +21,6 @@ final class BeaconMonitor: NSObject, ObservableObject {
 
     // MARK: - Public API
 
-    /// Rozpocznij proces autoryzacji i monitoring iBeacon.
     func start() {
         manager.delegate = self
         requestNotificationPermissionIfNeeded()
@@ -64,13 +46,11 @@ final class BeaconMonitor: NSObject, ObservableObject {
         }
     }
 
-    /// Zatrzymaj monitoring (opcjonalnie).
     func stop() {
         manager.stopMonitoring(for: region)
         update("stopped monitoring \(region.identifier)")
     }
 
-    /// Ręczne odświeżenie stanu wejścia/wyjścia (np. po starcie).
     func refreshState() {
         manager.requestState(for: region)
     }
@@ -90,7 +70,9 @@ final class BeaconMonitor: NSObject, ObservableObject {
     }
 
     private func requestNotificationPermissionIfNeeded() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(
+            options: [.alert, .sound, .badge]
+        ) { _, _ in }
     }
 
     private func notify(_ title: String, _ body: String) {
@@ -98,7 +80,11 @@ final class BeaconMonitor: NSObject, ObservableObject {
         c.title = title
         c.body = body
         UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil)
+            UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: c,
+                trigger: nil
+            )
         )
     }
 
@@ -115,7 +101,8 @@ final class BeaconMonitor: NSObject, ObservableObject {
 // MARK: - CLLocationManagerDelegate
 extension BeaconMonitor: CLLocationManagerDelegate {
 
-    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+    func locationManager(_ manager: CLLocationManager,
+                         didChangeAuthorization status: CLAuthorizationStatus) {
         DispatchQueue.main.async {
             switch status {
             case .authorizedAlways:
@@ -133,22 +120,25 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didStartMonitoringFor region: CLRegion) {
+    func locationManager(_ manager: CLLocationManager,
+                         didStartMonitoringFor region: CLRegion) {
         manager.requestState(for: region)
     }
 
-    func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
+    func locationManager(_ manager: CLLocationManager,
+                         didEnterRegion region: CLRegion) {
         guard region.identifier == self.region.identifier else { return }
         update("didEnterRegion")
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
-        // WYZWALACZ:
-        // Po wejściu w region uruchom BLE-łączność
-        // i zapisz pending wartość (domyślnie "test") do znanej charakterystyki.
-        BleClient.shared.writeAfterRegionEnter(valueToWrite: Data("test".utf8))
+        // KROK 2:
+        // Po wejściu w region próbujemy automatycznie połączyć się z
+        // wcześniej sparowanym urządzeniem i wysłać "test".
+        BleClient.shared.connectAndWriteAfterRegionEnter(valueToWrite: Data("test".utf8))
     }
 
-    func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+    func locationManager(_ manager: CLLocationManager,
+                         didExitRegion region: CLRegion) {
         guard region.identifier == self.region.identifier else { return }
         update("didExitRegion")
         notify("iBeacon", "Opuściliśmy zasięg beacona")
@@ -174,7 +164,8 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         update("monitoring fail: \(error.localizedDescription)")
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    func locationManager(_ manager: CLLocationManager,
+                         didFailWithError error: Error) {
         update("location error: \(error.localizedDescription)")
     }
 }

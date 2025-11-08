@@ -7,32 +7,27 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                Text("iBeacon → BLE GATT demo")
-                    .font(.title2)
+                Text("iBeacon → Auto BLE write")
+                    .font(.title3)
                     .padding(.top, 12)
 
-                // Statusy
-                VStack(spacing: 4) {
-                    Text("Beacon status: \(beacon.status)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
+                Text("Beacon status: \(beacon.status)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
 
-                    Text("BLE status: \(ble.stateText)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.horizontal)
+                Text("BLE status: \(ble.stateText)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
 
                 Divider().padding(.vertical, 4)
 
-                // 1) Pierwsze podłączenie / sparowanie
                 VStack(spacing: 8) {
-                    Text("Krok 1: Pierwsze podłączenie")
+                    Text("Krok 1: Skanuj i sparuj")
                         .font(.headline)
 
-                    Text("Będąc przy urządzeniu, uruchom skan, aby appka znalazła je po usłudze 0x1234 i zapamiętała jego identyfikator. To jest iOS-owy odpowiednik zapamiętania MAC.")
+                    Text("Będąc przy urządzeniu kliknij poniżej. Appka zeskanuje po 0xFFF0, połączy się i zapamięta identyfikator urządzenia (zamiast MAC).")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -46,12 +41,11 @@ struct ContentView: View {
 
                 Divider().padding(.vertical, 4)
 
-                // 2) Monitoring iBeacon
                 VStack(spacing: 8) {
-                    Text("Krok 2: Monitoring iBeacon")
+                    Text("Krok 2: Włącz monitoring iBeacon")
                         .font(.headline)
 
-                    Text("Po sparowaniu, włącz monitoring iBeacon. Po wejściu w region appka spróbuje połączyć się z zapamiętanym urządzeniem i zapisać \"test\" do charakterystyki 0x5678.")
+                    Text("Po wejściu w zasięg iBeacona aplikacja automatycznie połączy się z zapamiętanym urządzeniem i wyśle \"test\" do charakterystyki 0x5678.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
