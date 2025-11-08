@@ -131,10 +131,8 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         update("didEnterRegion")
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
-        // KROK 2:
-        // Po wejściu w region próbujemy automatycznie połączyć się z
-        // wcześniej sparowanym urządzeniem i wysłać "test".
-        BleClient.shared.connectAndWriteAfterRegionEnter(valueToWrite: Data("test".utf8))
+        // 🔽 DOKŁADNIE TA SAMA LOGIKA CO PRZYCISK "Skanuj i sparuj urządzenie BLE"
+        BleClient.shared.initialPairingScan()
     }
 
     func locationManager(_ manager: CLLocationManager,

@@ -7,7 +7,7 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                Text("iBeacon → Auto BLE write")
+                Text("iBeacon → Auto scan & pair")
                     .font(.title3)
                     .padding(.top, 12)
 
@@ -24,10 +24,10 @@ struct ContentView: View {
                 Divider().padding(.vertical, 4)
 
                 VStack(spacing: 8) {
-                    Text("Krok 1: Skanuj i sparuj")
+                    Text("Ręcznie: Skanuj i sparuj")
                         .font(.headline)
 
-                    Text("Będąc przy urządzeniu kliknij poniżej. Appka zeskanuje po 0xFFF0, połączy się i zapamięta identyfikator urządzenia (zamiast MAC).")
+                    Text("Kliknięcie poniżej uruchamia skan po 0xFFF0, łączy z urządzeniem, zapisuje identyfikator i wysyła \"test\" do 0x5678.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -42,10 +42,10 @@ struct ContentView: View {
                 Divider().padding(.vertical, 4)
 
                 VStack(spacing: 8) {
-                    Text("Krok 2: Włącz monitoring iBeacon")
+                    Text("Automatycznie po iBeaconie")
                         .font(.headline)
 
-                    Text("Po wejściu w zasięg iBeacona aplikacja automatycznie połączy się z zapamiętanym urządzeniem i wyśle \"test\" do charakterystyki 0x5678.")
+                    Text("Po włączeniu monitoringu, wejście w zasięg iBeacona wywoła dokładnie tę samą logikę, co przycisk powyżej (scan+connect+write).")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
