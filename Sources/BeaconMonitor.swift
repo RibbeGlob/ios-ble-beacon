@@ -4,11 +4,12 @@
 //  Sterowanie monitoringiem iBeacon i wyzwalanie zapisu "test"
 //  do charakterystyki 0x5678 w serwisie 0x1234 po wejściu w region.
 //
-//  Upewnij się, że w projekcie masz włączone Background Modes:
-//  - Location updates
-//  - Uses Bluetooth LE accessories (bluetooth-central)
+//  Wymagania (Capabilities):
+//  - Background Modes:
+//      - Location updates
+//      - Uses Bluetooth LE accessories (bluetooth-central)
 //
-//  Oraz klucze w Info.plist:
+//  W Info.plist:
 //  - NSLocationWhenInUseUsageDescription
 //  - NSLocationAlwaysAndWhenInUseUsageDescription
 //  - NSBluetoothAlwaysUsageDescription
@@ -26,7 +27,7 @@ final class BeaconMonitor: NSObject, ObservableObject {
 
     private let manager = CLLocationManager()
 
-    // TODO: PODMIEŃ na własny UUID/major/minor i identyfikator regionu
+    // USTAW: UUID/major/minor zgodnie z konfiguracją Twojego iBeacona
     private let uuid = UUID(uuidString: "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0")!
     private lazy var region = CLBeaconRegion(
         uuid: uuid,
@@ -133,7 +134,6 @@ extension BeaconMonitor: CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didStartMonitoringFor region: CLRegion) {
-        // Po starcie monitoringu poproś od razu o stan.
         manager.requestState(for: region)
     }
 
@@ -142,8 +142,9 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         update("didEnterRegion")
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
-        // WYZWALACZ: po wejściu w region uruchom BLE-łączność i zapisz "test"
-        // BleClient ma skonfigurowany service 0x1234 i char 0x5678.
+        // WYZWALACZ:
+        // Po wejściu w region uruchom BLE-łączność
+        // i zapisz pending wartość (domyślnie "test") do znanej charakterystyki.
         BleClient.shared.writeAfterRegionEnter(valueToWrite: Data("test".utf8))
     }
 
