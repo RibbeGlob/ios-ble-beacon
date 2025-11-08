@@ -1,19 +1,3 @@
-//
-//  BleClient.swift
-//
-//  Obsługa urządzenia z usługą 0x1234 i charakterystyką 0x5678.
-//  Scenariusze:
-//  - "Pierwsze podłączenie": ręczny skan + connect + zapisanie CBPeripheral.identifier
-//    (ekwiwalent "zapamiętania MAC-a" z Androida, ale po iOS-owemu).
-//  - Po wejściu w region iBeacon: szybka próba połączenia po zapamiętanym identifier,
-//    a jeśli się nie uda – krótki fallback scan.
-//
-//  Wymagania (Capabilities / Info.plist):
-//  - Background Modes: Uses Bluetooth LE accessories (bluetooth-central)
-//  - (dla iBeacon) Background Modes: Location updates
-//  - Info.plist: NSBluetoothAlwaysUsageDescription
-//
-
 import Foundation
 import CoreBluetooth
 import UserNotifications
@@ -35,11 +19,18 @@ final class BleClient: NSObject, ObservableObject {
 
     @Published var stateText = "idle"
 
-    // MARK: - Konfiguracja „Twojego” urządzenia
-    private let targetService       = CBUUID(string: "1234")
+    // MARK: - Konfiguracja dostosowana do Twojego urządzenia
+
+    /// UUID usługi REKLAMOWANEJ w scan response (SVC_UUID_16 = 0xFFF0)
+    private let advertisedService = CBUUID(string: "FFF0")
+
+    /// Rzeczywisty GATT Service UUID w urządzeniu (GPIO_SERVICE_UUID = 0x1234)
+    private let targetService = CBUUID(string: "1234")
+
+    /// Rzeczywista charakterystyka GPIO_CHARACTERISTIC_UUID = 0x5678
     private let preferredTargetChar = CBUUID(string: "5678")
 
-    // MARK: - Stan CoreBluetooth
+    // MARK: - CoreBluetooth stan
 
     private lazy var central: CBCentralManager? = {
         guard hasBluetoothUsageKey() else {
@@ -59,7 +50,6 @@ final class BleClient: NSObject, ObservableObject {
 
     private var peripheral: CBPeripheral?
 
-    // Zapisany identyfikator peryferium (ekwiwalent MAC, tylko lokalny dla appki)
     private let lastPeripheralKey = "LastPeripheralUUID"
 
     private var isScanning = false
@@ -82,17 +72,15 @@ final class BleClient: NSObject, ObservableObject {
 
     // MARK: - Public
 
-    /// Tylko wywołanie BT promptu (opcjonalnie).
     func requestBluetoothPermissionOnly() {
         guard let c = central else { return }
         _ = c.state
         update("BT state=\(c.state.rawValue) — auth=\(btAuthStatus)")
     }
 
-    /// PIERWSZE PODŁĄCZENIE:
-    /// Ręczny skan + connect do urządzenia z usługą targetService.
-    /// Po pomyślnym połączeniu identyfikator peryferium zostanie zapisany
-    /// i będzie używany później po wejściu w region iBeacon.
+    /// Krok 1: pierwsze podłączenie przy urządzeniu.
+    /// Skanujemy po advertisedService (0xFFF0), łączymy,
+    /// zapisujemy CBPeripheral.identifier jako "nasz".
     func initialPairingScan() {
         guard let c = central else {
             update("central=nil (brak klucza BT usage?)")
@@ -103,19 +91,17 @@ final class BleClient: NSObject, ObservableObject {
             return
         }
         guard !isScanning else { return }
-        beginScan(with: [targetService])
+        beginScan(with: [advertisedService])
     }
 
-    /// Krótkie skanowanie/połączenie (może być używane ręcznie).
     func shortScanAndConnect() {
         initialPairingScan()
     }
 
-    /// Wyzwalane po wejściu w region iBeacon.
-    /// Próbuje:
-    /// 1) połączyć się po zapamiętanym CBPeripheral.identifier,
-    /// 2) użyć już połączonego peryferium,
-    /// 3) w ostateczności zrobić krótki skan po targetService.
+    /// Krok 2: wywoływane po wejściu w region iBeacon.
+    /// 1) próba po zapamiętanym identifier,
+    /// 2) próba po already-connected z targetService,
+    /// 3) fallback: krótki scan po advertisedService (0xFFF0).
     func writeAfterRegionEnter(valueToWrite: Data) {
         _ = central?.state
         guard let c = central, c.state == .poweredOn else {
@@ -125,7 +111,6 @@ final class BleClient: NSObject, ObservableObject {
         pendingWriteValue = valueToWrite
         beginBGTask(named: "ibeacon-write")
 
-        // 1) spróbuj po znanym identifier
         if let known = retrieveKnownPeripheral() {
             update("connect known peripheral (\(known.identifier.uuidString))…")
             self.peripheral = known
@@ -133,7 +118,6 @@ final class BleClient: NSObject, ObservableObject {
             return
         }
 
-        // 2) może już jest połączony z systemem
         if let connected = c.retrieveConnectedPeripherals(withServices: [targetService]).first {
             update("use connected peripheral")
             self.peripheral = connected
@@ -142,8 +126,7 @@ final class BleClient: NSObject, ObservableObject {
             return
         }
 
-        // 3) fallback scan
-        beginScan(with: [targetService])
+        beginScan(with: [advertisedService])
     }
 
     // MARK: - Private
@@ -166,8 +149,7 @@ final class BleClient: NSObject, ObservableObject {
         guard let c = central else { return nil }
         guard let uuidStr = UserDefaults.standard.string(forKey: lastPeripheralKey),
               let uuid = UUID(uuidString: uuidStr) else { return nil }
-        let peris = c.retrievePeripherals(withIdentifiers: [uuid])
-        return peris.first
+        return c.retrievePeripherals(withIdentifiers: [uuid]).first
     }
 
     private func persistPeripheralIdentifier(_ p: CBPeripheral) {
@@ -270,7 +252,7 @@ extension BleClient: CBCentralManagerDelegate {
         notify("BLE", "Połączono z \(peripheral.name ?? "urządzeniem")")
         persistPeripheralIdentifier(peripheral)
         peripheral.delegate = self
-        peripheral.discoverServices([targetService])
+        peripheral.discoverServices([targetService]) // szukamy 0x1234
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -303,18 +285,18 @@ extension BleClient: CBPeripheralDelegate {
             return
         }
 
-        var targetHit = false
+        var hit = false
         for s in services {
             print("[BleClient] service:", s.uuid.uuidString)
             if s.uuid == targetService {
-                targetHit = true
+                hit = true
                 peripheral.discoverCharacteristics(nil, for: s)
             }
         }
 
-        if !targetHit, let any = services.first {
-            update("target svc not found, try \(any.uuid.uuidString)")
-            peripheral.discoverCharacteristics(nil, for: any)
+        if !hit {
+            update("target svc 0x1234 not found")
+            endBGTaskIfAny()
         }
     }
 
