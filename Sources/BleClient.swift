@@ -93,6 +93,12 @@ final class BleClient: NSObject, ObservableObject {
     private var pendingWriteValue: Data?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
+    /// Flaga: iBeacon poprosił o auto-skan, ale BT jeszcze nie był gotowy.
+    private var pendingAutoScan = false
+    /// Minimalny odstęp między auto-skanami, żeby nie spamować (sekundy)
+    private let autoScanCooldown: TimeInterval = 5
+    private var lastAutoScanDate: Date?
+
     var btAuthStatus: String {
         if #available(iOS 13.0, *) { return bluetoothAuthString() }
         return "n/a"
@@ -106,44 +112,83 @@ final class BleClient: NSObject, ObservableObject {
 
     // MARK: - Public
 
-    func requestBluetoothPermissionOnly() {
-        guard let c = central else {
-            update("central=nil w requestBluetoothPermissionOnly")
-            return
-        }
-        _ = c.state
-        update("BT state=\(c.state.rawValue) — auth=\(btAuthStatus)")
-    }
-
-    /// Logika "Skanuj i sparuj urządzenie BLE":
-    /// - skan po 0xFFF0 (advertisedService)
-    /// - connect
-    /// - discover 0x1234
-    /// - znajdź 0x5678
-    /// - write "test"
-    /// - zapisz peripheral.identifier
+    /// Tylko do ręcznego wywołania z UI: odpala skan natychmiast,
+    /// jeśli BT jest gotowe.
     func initialPairingScan() {
         guard let c = central else {
-            update("central=nil (brak klucza BT usage?)")
+            update("initialPairingScan: central=nil (brak klucza BT usage?)")
             return
         }
         guard c.state == .poweredOn else {
-            update("BT off (\(c.state.rawValue)) — auth=\(btAuthStatus)")
+            update("initialPairingScan: BT off (\(c.state.rawValue)) — auth=\(btAuthStatus)")
             return
         }
         guard !isScanning else {
-            update("scan already in progress — skip")
+            update("initialPairingScan: scan already in progress — skip")
             return
         }
 
         pendingWriteValue = Data("test".utf8)
-
         beginBGTask(named: "pairing-scan")
         beginScan(with: [advertisedService])
     }
 
     func shortScanAndConnect() {
         initialPairingScan()
+    }
+
+    /// Auto-skan wywoływany z BeaconMonitor (wejście w region, state inside itp.).
+    /// Ten wariant jest przygotowany na tło / brak foregroundu.
+    func autoScanFromBeacon(reason: String = "beacon") {
+        guard let c = central else {
+            update("autoScanFromBeacon[\(reason)]: central=nil")
+            return
+        }
+
+        // Anti-spam: nie odpalaj co sekundę przy flappującym regionie.
+        let now = Date()
+        if let last = lastAutoScanDate,
+           now.timeIntervalSince(last) < autoScanCooldown {
+            update("autoScanFromBeacon[\(reason)]: skip — cooldown")
+            return
+        }
+
+        // Jeśli już skanujemy, nie dublujemy.
+        if isScanning {
+            update("autoScanFromBeacon[\(reason)]: already scanning")
+            return
+        }
+
+        switch c.state {
+        case .poweredOn:
+            lastAutoScanDate = now
+            pendingWriteValue = Data("test".utf8)
+            beginBGTask(named: "auto-\(reason)-scan")
+            beginScan(with: [advertisedService])
+            update("autoScanFromBeacon[\(reason)]: started scan (state=poweredOn)")
+
+        case .resetting, .unknown:
+            // BT w przejściu – zaznacz, że jak tylko wstanie, mamy skanować
+            pendingAutoScan = true
+            update("autoScanFromBeacon[\(reason)]: state=\(c.state.rawValue), set pendingAutoScan=true")
+
+        case .poweredOff, .unsupported, .unauthorized:
+            // Tutaj i tak nic nie zrobimy – log do debugowania.
+            update("autoScanFromBeacon[\(reason)]: state=\(c.state.rawValue), no scan")
+
+        @unknown default:
+            pendingAutoScan = true
+            update("autoScanFromBeacon[\(reason)]: unknown state, pendingAutoScan=true")
+        }
+    }
+
+    func requestBluetoothPermissionOnly() {
+        guard let c = central else {
+            update("requestBluetoothPermissionOnly: central=nil")
+            return
+        }
+        _ = c.state
+        update("BT state=\(c.state.rawValue) — auth=\(btAuthStatus)")
     }
 
     // MARK: - Private helpers
@@ -230,7 +275,7 @@ final class BleClient: NSObject, ObservableObject {
     private func beginBGTask(named: String) {
         endBGTaskIfAny()
         bgTask = UIApplication.shared.beginBackgroundTask(withName: named) { [weak self] in
-            self?.update("BG task expiring")
+            self?.update("BG task expiring (\(named))")
             self?.endBGTaskIfAny()
         }
         update("BG task begin: \(named)")
@@ -267,6 +312,16 @@ extension BleClient: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         update("central state changed=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
+
+        // Jeśli iBeacon wcześniej poprosił o auto-skan, a BT dopiero teraz wstało.
+        if central.state == .poweredOn, pendingAutoScan, !isScanning {
+            pendingAutoScan = false
+            lastAutoScanDate = Date()
+            pendingWriteValue = Data("test".utf8)
+            beginBGTask(named: "pending-auto-scan")
+            beginScan(with: [advertisedService])
+            update("centralDidUpdateState: run pendingAutoScan")
+        }
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -275,7 +330,7 @@ extension BleClient: CBCentralManagerDelegate {
            let restored = peripherals.first {
             self.peripheral = restored
             self.peripheral?.delegate = self
-            update("restored peripheral \(restored.identifier.uuidString)")
+            update("willRestoreState: restored peripheral \(restored.identifier.uuidString)")
             if restored.state == .connected {
                 update("restored peripheral already connected — discover services")
                 restored.discoverServices([targetService])
@@ -290,7 +345,7 @@ extension BleClient: CBCentralManagerDelegate {
                         advertisementData: [String : Any],
                         rssi RSSI: NSNumber) {
 
-        update("found \(peripheral.name ?? "device") rssi=\(RSSI)")
+        update("didDiscover: \(peripheral.name ?? "device") rssi=\(RSSI)")
         stopScanIfAny(reason: "candidate")
         self.peripheral = peripheral
         central.connect(peripheral, options: nil)
@@ -298,7 +353,7 @@ extension BleClient: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager,
                         didConnect peripheral: CBPeripheral) {
-        update("connected to \(peripheral.name ?? "device")")
+        update("didConnect: \(peripheral.name ?? "device")")
         notify("BLE", "Połączono z \(peripheral.name ?? "urządzeniem")")
         persistPeripheralIdentifier(peripheral)
         peripheral.delegate = self
@@ -308,14 +363,14 @@ extension BleClient: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager,
                         didFailToConnect peripheral: CBPeripheral,
                         error: Error?) {
-        update("connect failed: \(error?.localizedDescription ?? "-")")
+        update("didFailToConnect: \(error?.localizedDescription ?? "-")")
         endBGTaskIfAny()
     }
 
-    func centralManager(_ central: CBCentralManager,
+    func centralManager(_ central: CBCentralManager),
                         didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
-        update("disconnected (\(error?.localizedDescription ?? "no error"))")
+        update("didDisconnect: \(error?.localizedDescription ?? "no error")")
         endBGTaskIfAny()
     }
 }
@@ -326,12 +381,12 @@ extension BleClient: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral,
                     didDiscoverServices error: Error?) {
         guard error == nil else {
-            update("svc err: \(error!.localizedDescription)")
+            update("didDiscoverServices error: \(error!.localizedDescription)")
             endBGTaskIfAny()
             return
         }
         guard let services = peripheral.services, !services.isEmpty else {
-            update("no services")
+            update("didDiscoverServices: no services")
             endBGTaskIfAny()
             return
         }
@@ -355,12 +410,12 @@ extension BleClient: CBPeripheralDelegate {
                     didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
         guard error == nil else {
-            update("char err: \(error!.localizedDescription)")
+            update("didDiscoverCharacteristics error: \(error!.localizedDescription)")
             endBGTaskIfAny()
             return
         }
         guard let chars = service.characteristics, !chars.isEmpty else {
-            update("no chars")
+            update("didDiscoverCharacteristics: no chars")
             endBGTaskIfAny()
             return
         }
@@ -406,9 +461,9 @@ extension BleClient: CBPeripheralDelegate {
                     didWriteValueFor characteristic: CBCharacteristic,
                     error: Error?) {
         if let e = error {
-            update("write error: \(e.localizedDescription)")
+            update("didWriteValue error: \(e.localizedDescription)")
         } else {
-            update("write OK on \(characteristic.uuid.uuidString)")
+            update("didWriteValue OK on \(characteristic.uuid.uuidString)")
             notify("BLE", "Write OK na \(characteristic.uuid.uuidString)")
         }
         pendingWriteValue = nil

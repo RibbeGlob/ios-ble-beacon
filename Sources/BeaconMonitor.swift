@@ -18,9 +18,9 @@ final class BeaconMonitor: NSObject, ObservableObject {
         identifier: "ibeacon-target"
     )
 
-    // Anti-spam dla automatycznego skanu po zdarzeniach beaconowych
+    // Możesz zostawić minimalny cooldown, żeby nie spamować, ale nie zabijać działania
     private var lastAutoScanDate: Date?
-    private let autoScanCooldown: TimeInterval = 30 // sekundy
+    private let autoScanCooldown: TimeInterval = 5 // sekundy
 
     func start() {
         manager.delegate = self
@@ -100,6 +100,7 @@ final class BeaconMonitor: NSObject, ObservableObject {
 
     private func triggerScanIfAllowed(reason: String) {
         let now = Date()
+
         if let last = lastAutoScanDate,
            now.timeIntervalSince(last) < autoScanCooldown {
             update("skip auto scan (\(reason)) — cooldown")
@@ -107,6 +108,9 @@ final class BeaconMonitor: NSObject, ObservableObject {
         }
 
         lastAutoScanDate = now
+
+        // Tu tylko log + delegacja do BLE.
+        // BLE sam sprawdzi bt state i permissions.
         update("auto scan start (\(reason))")
         BleClient.shared.initialPairingScan()
     }
@@ -147,7 +151,6 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         update("didEnterRegion")
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
-        // Automatyczny skan po wejściu w region
         triggerScanIfAllowed(reason: "didEnterRegion")
     }
 
@@ -173,7 +176,8 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         }()
         update(txt)
 
-        // Jeśli appka startuje już w zasięgu beacona → też odpal skan (z cooldownem)
+        // Jeśli appka jest już w środku regionu (np. cold start / ekran wyłączony)
+        // -> też spróbuj zeskanować.
         if state == .inside {
             triggerScanIfAllowed(reason: "didDetermineState(.inside)")
         }
