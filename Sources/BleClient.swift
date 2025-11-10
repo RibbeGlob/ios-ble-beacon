@@ -52,12 +52,12 @@ final class BleClient: NSObject, ObservableObject {
 
     @Published var stateText = "idle"
 
-    // MARK: - Konfiguracja pod Twoje urządzenie
+    // MARK: - Konfiguracja
 
     /// Usługa reklamowana w Scan Response (SVC_UUID_16 = 0xFFF0)
     private let advertisedService = CBUUID(string: "FFF0")
 
-    /// Rzeczywisty GATT Service w urządzeniu (GPIO_SERVICE_UUID = 0x1234)
+    /// Rzeczywisty GATT Service (GPIO_SERVICE_UUID = 0x1234)
     private let targetService = CBUUID(string: "1234")
 
     /// Rzeczywista charakterystyka (GPIO_CHARACTERISTIC_UUID = 0x5678)
@@ -71,11 +71,13 @@ final class BleClient: NSObject, ObservableObject {
             notify("Bluetooth", "Brak klucza NSBluetoothAlwaysUsageDescription.")
             return nil
         }
+
         let manager = CBCentralManager(
             delegate: self,
             queue: .main,
             options: [
                 CBCentralManagerOptionShowPowerAlertKey: true,
+                // WAŻNE dla background/state restoration:
                 CBCentralManagerOptionRestoreIdentifierKey: "pl.yourcompany.ble.central"
             ]
         )
@@ -93,7 +95,7 @@ final class BleClient: NSObject, ObservableObject {
     private var pendingWriteValue: Data?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
-    /// Flaga: iBeacon poprosił o auto-skan, ale BT nie było gotowe.
+    /// Czy mamy oczekujący auto-scan (iBeacon wybudził, BT nie było gotowe)?
     private var pendingAutoScan = false
 
     /// Minimalny odstęp między auto-skanami (sekundy)
@@ -111,10 +113,8 @@ final class BleClient: NSObject, ObservableObject {
         DebugLog.shared.add("BLE", "BleClient init")
     }
 
-    // MARK: - Public (UI / ręczne)
+    // MARK: - Public: ręczne parowanie z UI
 
-    /// Ręczne parowanie z przycisku:
-    /// wymaga poweredOn, nie ustawia pendingAutoScan.
     func initialPairingScan() {
         guard let c = central else {
             update("initialPairingScan: central=nil (brak klucza BT usage?)")
@@ -138,9 +138,34 @@ final class BleClient: NSObject, ObservableObject {
         initialPairingScan()
     }
 
-    /// Auto-skan wołany z BeaconMonitor (didEnterRegion / didDetermineState itp.).
-    /// Ma działać również gdy aplikacja jest w tle / nie na pierwszym planie.
-    func autoScanFromBeacon(reason: String = "beacon") {
+    // MARK: - Public: auto logika wywoływana z BeaconMonitor
+
+    /// Wywołuj TYLKO z BeaconMonitor (didEnterRegion / state inside).
+    /// 1. Próbuje podłączyć się do znanego peryferium po zapamiętanym identifier.
+    /// 2. Jeśli brak znanego – odpala autoScanFromBeacon jako fallback.
+    func autoConnectFromBeacon(reason: String = "beacon") {
+        guard let c = central else {
+            update("autoConnectFromBeacon[\(reason)]: central=nil")
+            return
+        }
+
+        // Najpierw spróbuj znanego urządzenia (zalecane przez Apple w tle)
+        if let known = retrieveKnownPeripheral() {
+            update("autoConnectFromBeacon[\(reason)]: found known peripheral \(known.identifier)")
+            peripheral = known
+            known.delegate = self
+            beginBGTask(named: "auto-\(reason)-connect-known")
+            c.connect(known, options: nil)
+            return
+        }
+
+        // Jeśli nie znamy urządzenia (pierwszy raz) – dopiero wtedy scan
+        update("autoConnectFromBeacon[\(reason)]: no known peripheral, fallback to autoScanFromBeacon")
+        autoScanFromBeacon(reason: reason)
+    }
+
+    /// Fallback: auto-skan z beacona. Może być ograniczony w tle przez iOS.
+    func autoScanFromBeacon(reason: String = "beacon-scan") {
         guard let c = central else {
             update("autoScanFromBeacon[\(reason)]: central=nil")
             return
@@ -162,9 +187,9 @@ final class BleClient: NSObject, ObservableObject {
         case .poweredOn:
             lastAutoScanDate = now
             pendingWriteValue = Data("test".utf8)
-            beginBGTask(named: "auto-\(reason)-scan")
+            beginBGTask(named: "auto-\(reason)")
             beginScan(with: [advertisedService])
-            update("autoScanFromBeacon[\(reason)]: started scan (state=poweredOn)")
+            update("autoScanFromBeacon[\(reason)]: started scan (poweredOn)")
 
         case .resetting, .unknown:
             pendingAutoScan = true
@@ -227,6 +252,7 @@ final class BleClient: NSObject, ObservableObject {
             update("retrieveKnownPeripheral: no stored UUID")
             return nil
         }
+
         let result = c.retrievePeripherals(withIdentifiers: [uuid]).first
         update("retrieveKnownPeripheral: \(result != nil ? "found" : "not found")")
         return result
@@ -312,7 +338,7 @@ extension BleClient: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         update("central state changed=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
 
-        // Jeśli wcześniej iBeacon ustawił pendingAutoScan, a BT dopiero teraz jest gotowe:
+        // Jeśli iBeacon ustawił pendingAutoScan, a BT dopiero teraz gotowe:
         if central.state == .poweredOn, pendingAutoScan, !isScanning {
             pendingAutoScan = false
             lastAutoScanDate = Date()

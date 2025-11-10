@@ -113,7 +113,8 @@ final class BeaconMonitor: NSObject, ObservableObject {
         // BLE sam sprawdzi bt state i permissions.
         update("auto scan start (\(reason))")
         // BleClient.shared.initialPairingScan()
-        BleClient.shared.autoScanFromBeacon(reason: "didEnterRegion")
+        BleClient.shared.autoConnectFromBeacon(reason: "didEnterRegion")
+
     }
 }
 
