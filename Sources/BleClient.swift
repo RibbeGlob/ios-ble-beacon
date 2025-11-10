@@ -375,7 +375,7 @@ extension BleClient: CBCentralManagerDelegate {
     }
 }
 
-// MARK: - CBPeripheralDelegate
+// MARK: - CBPeripheralDelegate t
 extension BleClient: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral,
