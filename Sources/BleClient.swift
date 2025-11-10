@@ -3,6 +3,39 @@ import CoreBluetooth
 import UserNotifications
 import UIKit
 
+// MARK: - Wspólny logger
+
+final class DebugLog: ObservableObject {
+    static let shared = DebugLog()
+
+    @Published private(set) var lines: [String] = []
+
+    private let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    func add(_ tag: String, _ msg: String) {
+        let time = dateFormatter.string(from: Date())
+        let line = "[\(time)] [\(tag)] \(msg)"
+
+        DispatchQueue.main.async {
+            self.lines.append(line)
+            if self.lines.count > 500 {
+                self.lines.removeFirst(self.lines.count - 500)
+            }
+            print(line)
+        }
+    }
+
+    var joined: String {
+        lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - BLE Client
+
 @available(iOS 13.0, *)
 fileprivate func bluetoothAuthString() -> String {
     switch CBManager.authorization {
@@ -38,7 +71,7 @@ final class BleClient: NSObject, ObservableObject {
             notify("Bluetooth", "Brak klucza NSBluetoothAlwaysUsageDescription.")
             return nil
         }
-        return CBCentralManager(
+        let manager = CBCentralManager(
             delegate: self,
             queue: .main,
             options: [
@@ -46,6 +79,8 @@ final class BleClient: NSObject, ObservableObject {
                 CBCentralManagerOptionRestoreIdentifierKey: "pl.yourcompany.ble.central"
             ]
         )
+        update("CBCentralManager init, state=\(manager.state.rawValue)")
+        return manager
     }()
 
     private var peripheral: CBPeripheral?
@@ -66,12 +101,16 @@ final class BleClient: NSObject, ObservableObject {
     override init() {
         super.init()
         requestLocalNotificationsIfNeeded()
+        DebugLog.shared.add("BLE", "BleClient init")
     }
 
     // MARK: - Public
 
     func requestBluetoothPermissionOnly() {
-        guard let c = central else { return }
+        guard let c = central else {
+            update("central=nil w requestBluetoothPermissionOnly")
+            return
+        }
         _ = c.state
         update("BT state=\(c.state.rawValue) — auth=\(btAuthStatus)")
     }
@@ -92,9 +131,11 @@ final class BleClient: NSObject, ObservableObject {
             update("BT off (\(c.state.rawValue)) — auth=\(btAuthStatus)")
             return
         }
-        guard !isScanning else { return }
+        guard !isScanning else {
+            update("scan already in progress — skip")
+            return
+        }
 
-        // jeśli chcemy wymusić write konkretnej wartości:
         pendingWriteValue = Data("test".utf8)
 
         beginBGTask(named: "pairing-scan")
@@ -108,10 +149,19 @@ final class BleClient: NSObject, ObservableObject {
     // MARK: - Private helpers
 
     private func beginScan(with services: [CBUUID]?) {
-        guard let c = central, !isScanning else { return }
+        guard let c = central else {
+            update("beginScan: central=nil")
+            return
+        }
+        guard !isScanning else {
+            update("beginScan: already scanning")
+            return
+        }
+
         isScanning = true
 
-        update("scan \(services?.map { $0.uuidString }.joined(separator: ",") ?? "any")…")
+        let svcDesc = services?.map { $0.uuidString }.joined(separator: ",") ?? "any"
+        update("scan start for services: \(svcDesc)")
 
         c.scanForPeripherals(
             withServices: services,
@@ -120,15 +170,22 @@ final class BleClient: NSObject, ObservableObject {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + scanWindow) { [weak self] in
             self?.stopScanIfAny(reason: "timeout")
-            // BG task zakończymy po ewentualnym connect/niepowodzeniu
         }
     }
 
     private func retrieveKnownPeripheral() -> CBPeripheral? {
-        guard let c = central else { return nil }
+        guard let c = central else {
+            update("retrieveKnownPeripheral: central=nil")
+            return nil
+        }
         guard let uuidStr = UserDefaults.standard.string(forKey: lastPeripheralKey),
-              let uuid = UUID(uuidString: uuidStr) else { return nil }
-        return c.retrievePeripherals(withIdentifiers: [uuid]).first
+              let uuid = UUID(uuidString: uuidStr) else {
+            update("retrieveKnownPeripheral: no stored UUID")
+            return nil
+        }
+        let result = c.retrievePeripherals(withIdentifiers: [uuid]).first
+        update("retrieveKnownPeripheral: \(result != nil ? "found" : "not found")")
+        return result
     }
 
     private func persistPeripheralIdentifier(_ p: CBPeripheral) {
@@ -149,7 +206,7 @@ final class BleClient: NSObject, ObservableObject {
         } else {
             DispatchQueue.main.async { self.stateText = text }
         }
-        print("[BleClient] \(text)")
+        DebugLog.shared.add("BLE", text)
     }
 
     private func notify(_ title: String, _ body: String) {
@@ -176,17 +233,28 @@ final class BleClient: NSObject, ObservableObject {
             self?.update("BG task expiring")
             self?.endBGTaskIfAny()
         }
+        update("BG task begin: \(named)")
     }
 
     private func endBGTaskIfAny() {
         if bgTask != .invalid {
             UIApplication.shared.endBackgroundTask(bgTask)
+            update("BG task end")
             bgTask = .invalid
         }
     }
 
     private func stopScanIfAny(reason: String) {
-        guard let c = central, isScanning else { return }
+        guard let c = central else {
+            update("stopScanIfAny: central=nil")
+            isScanning = false
+            endBGTaskIfAny()
+            return
+        }
+        guard isScanning else {
+            update("stopScanIfAny: not scanning (\(reason))")
+            return
+        }
         c.stopScan()
         isScanning = false
         update("stop scan (\(reason))")
@@ -198,7 +266,7 @@ final class BleClient: NSObject, ObservableObject {
 extension BleClient: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        update("central=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
+        update("central state changed=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -207,10 +275,13 @@ extension BleClient: CBCentralManagerDelegate {
            let restored = peripherals.first {
             self.peripheral = restored
             self.peripheral?.delegate = self
-            update("restored peripheral")
+            update("restored peripheral \(restored.identifier.uuidString)")
             if restored.state == .connected {
+                update("restored peripheral already connected — discover services")
                 restored.discoverServices([targetService])
             }
+        } else {
+            update("willRestoreState: no peripherals")
         }
     }
 
@@ -231,7 +302,7 @@ extension BleClient: CBCentralManagerDelegate {
         notify("BLE", "Połączono z \(peripheral.name ?? "urządzeniem")")
         persistPeripheralIdentifier(peripheral)
         peripheral.delegate = self
-        peripheral.discoverServices([targetService]) // szukamy 0x1234
+        peripheral.discoverServices([targetService])
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -244,7 +315,7 @@ extension BleClient: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
-        update("disconnected")
+        update("disconnected (\(error?.localizedDescription ?? "no error"))")
         endBGTaskIfAny()
     }
 }
@@ -267,7 +338,7 @@ extension BleClient: CBPeripheralDelegate {
 
         var hit = false
         for s in services {
-            print("[BleClient] service:", s.uuid.uuidString)
+            DebugLog.shared.add("BLE", "service: \(s.uuid.uuidString)")
             if s.uuid == targetService {
                 hit = true
                 peripheral.discoverCharacteristics(nil, for: s)
@@ -295,7 +366,7 @@ extension BleClient: CBPeripheralDelegate {
         }
 
         for ch in chars {
-            print("[BleClient] char:", ch.uuid.uuidString, "props:", ch.properties)
+            DebugLog.shared.add("BLE", "char: \(ch.uuid.uuidString) props: \(ch.properties)")
         }
 
         if let ch = chars.first(where: { $0.uuid == preferredTargetChar }) {
@@ -315,7 +386,6 @@ extension BleClient: CBPeripheralDelegate {
     }
 
     private func writePayload(on peripheral: CBPeripheral, to ch: CBCharacteristic) {
-        // jeśli pendingWriteValue nie ustawione, domyślnie "test"
         let payload = pendingWriteValue ?? Data("test".utf8)
         let type: CBCharacteristicWriteType =
             ch.properties.contains(.write) ? .withResponse : .withoutResponse

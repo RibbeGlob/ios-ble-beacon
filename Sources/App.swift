@@ -3,10 +3,13 @@ import SwiftUI
 @main
 struct BLEBeaconApp: App {
     init() {
-        // Poproś o powiadomienia na starcie (możesz też przenieść na przycisk)
+        // Poproś o powiadomienia na starcie
         Notifications.requestPermission()
 
-        // Start monitoringu beacona od razu (możesz też zrobić to z przycisku)
+        // Upewnij się, że BleClient jest zainicjalizowany (central, logger itd.)
+        _ = BleClient.shared
+
+        // Start monitoringu beacona od razu
         BeaconMonitor.shared.start()
     }
 

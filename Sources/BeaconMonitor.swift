@@ -10,7 +10,6 @@ final class BeaconMonitor: NSObject, ObservableObject {
 
     private let manager = CLLocationManager()
 
-    // Ustaw zgodnie z konfiguracją iBeacon w urządzeniu
     private let uuid = UUID(uuidString: "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0")!
     private lazy var region = CLBeaconRegion(
         uuid: uuid,
@@ -19,7 +18,9 @@ final class BeaconMonitor: NSObject, ObservableObject {
         identifier: "ibeacon-target"
     )
 
-    // MARK: - Public API
+    // Anti-spam dla automatycznego skanu po zdarzeniach beaconowych
+    private var lastAutoScanDate: Date?
+    private let autoScanCooldown: TimeInterval = 30 // sekundy
 
     func start() {
         manager.delegate = self
@@ -53,6 +54,7 @@ final class BeaconMonitor: NSObject, ObservableObject {
 
     func refreshState() {
         manager.requestState(for: region)
+        update("requestState for \(region.identifier)")
     }
 
     // MARK: - Private
@@ -66,7 +68,6 @@ final class BeaconMonitor: NSObject, ObservableObject {
         manager.requestState(for: region)
 
         update("monitoring \(region.identifier)")
-        print("[BeaconMonitor] Monitoring started")
     }
 
     private func requestNotificationPermissionIfNeeded() {
@@ -94,7 +95,20 @@ final class BeaconMonitor: NSObject, ObservableObject {
         } else {
             DispatchQueue.main.async { self.status = text }
         }
-        print("[BeaconMonitor] \(text)")
+        DebugLog.shared.add("BEACON", text)
+    }
+
+    private func triggerScanIfAllowed(reason: String) {
+        let now = Date()
+        if let last = lastAutoScanDate,
+           now.timeIntervalSince(last) < autoScanCooldown {
+            update("skip auto scan (\(reason)) — cooldown")
+            return
+        }
+
+        lastAutoScanDate = now
+        update("auto scan start (\(reason))")
+        BleClient.shared.initialPairingScan()
     }
 }
 
@@ -106,10 +120,11 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         DispatchQueue.main.async {
             switch status {
             case .authorizedAlways:
+                self.update("auth: Always — startMonitoring")
                 self.startMonitoring()
             case .authorizedWhenInUse:
+                self.update("auth: WhenInUse — request Always")
                 manager.requestAlwaysAuthorization()
-                self.update("request Always")
             case .denied, .restricted:
                 self.update("location denied/restricted")
             case .notDetermined:
@@ -122,6 +137,7 @@ extension BeaconMonitor: CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager,
                          didStartMonitoringFor region: CLRegion) {
+        update("didStartMonitoringFor \(region.identifier)")
         manager.requestState(for: region)
     }
 
@@ -131,8 +147,8 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         update("didEnterRegion")
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
-        // 🔽 DOKŁADNIE TA SAMA LOGIKA CO PRZYCISK "Skanuj i sparuj urządzenie BLE"
-        BleClient.shared.initialPairingScan()
+        // Automatyczny skan po wejściu w region
+        triggerScanIfAllowed(reason: "didEnterRegion")
     }
 
     func locationManager(_ manager: CLLocationManager,
@@ -145,6 +161,8 @@ extension BeaconMonitor: CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager,
                          didDetermineState state: CLRegionState,
                          for region: CLRegion) {
+        guard region.identifier == self.region.identifier else { return }
+
         let txt: String = {
             switch state {
             case .inside:  return "state: inside"
@@ -154,6 +172,11 @@ extension BeaconMonitor: CLLocationManagerDelegate {
             }
         }()
         update(txt)
+
+        // Jeśli appka startuje już w zasięgu beacona → też odpal skan (z cooldownem)
+        if state == .inside {
+            triggerScanIfAllowed(reason: "didDetermineState(.inside)")
+        }
     }
 
     func locationManager(_ manager: CLLocationManager,
