@@ -112,7 +112,8 @@ final class BeaconMonitor: NSObject, ObservableObject {
         // Tu tylko log + delegacja do BLE.
         // BLE sam sprawdzi bt state i permissions.
         update("auto scan start (\(reason))")
-        BleClient.shared.initialPairingScan()
+        // BleClient.shared.initialPairingScan()
+        BleClient.shared.autoScanFromBeacon(reason: "didEnterRegion")
     }
 }
 
@@ -179,7 +180,9 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         // Jeśli appka jest już w środku regionu (np. cold start / ekran wyłączony)
         // -> też spróbuj zeskanować.
         if state == .inside {
-            triggerScanIfAllowed(reason: "didDetermineState(.inside)")
+            // triggerScanIfAllowed(reason: "didDetermineState(.inside)")
+            BleClient.shared.autoScanFromBeacon(reason: "inside")
+
         }
     }
 
