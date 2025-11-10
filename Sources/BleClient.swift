@@ -93,9 +93,10 @@ final class BleClient: NSObject, ObservableObject {
     private var pendingWriteValue: Data?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
-    /// Flaga: iBeacon poprosił o auto-skan, ale BT jeszcze nie był gotowy.
+    /// Flaga: iBeacon poprosił o auto-skan, ale BT nie było gotowe.
     private var pendingAutoScan = false
-    /// Minimalny odstęp między auto-skanami, żeby nie spamować (sekundy)
+
+    /// Minimalny odstęp między auto-skanami (sekundy)
     private let autoScanCooldown: TimeInterval = 5
     private var lastAutoScanDate: Date?
 
@@ -110,10 +111,10 @@ final class BleClient: NSObject, ObservableObject {
         DebugLog.shared.add("BLE", "BleClient init")
     }
 
-    // MARK: - Public
+    // MARK: - Public (UI / ręczne)
 
-    /// Tylko do ręcznego wywołania z UI: odpala skan natychmiast,
-    /// jeśli BT jest gotowe.
+    /// Ręczne parowanie z przycisku:
+    /// wymaga poweredOn, nie ustawia pendingAutoScan.
     func initialPairingScan() {
         guard let c = central else {
             update("initialPairingScan: central=nil (brak klucza BT usage?)")
@@ -137,15 +138,14 @@ final class BleClient: NSObject, ObservableObject {
         initialPairingScan()
     }
 
-    /// Auto-skan wywoływany z BeaconMonitor (wejście w region, state inside itp.).
-    /// Ten wariant jest przygotowany na tło / brak foregroundu.
+    /// Auto-skan wołany z BeaconMonitor (didEnterRegion / didDetermineState itp.).
+    /// Ma działać również gdy aplikacja jest w tle / nie na pierwszym planie.
     func autoScanFromBeacon(reason: String = "beacon") {
         guard let c = central else {
             update("autoScanFromBeacon[\(reason)]: central=nil")
             return
         }
 
-        // Anti-spam: nie odpalaj co sekundę przy flappującym regionie.
         let now = Date()
         if let last = lastAutoScanDate,
            now.timeIntervalSince(last) < autoScanCooldown {
@@ -153,7 +153,6 @@ final class BleClient: NSObject, ObservableObject {
             return
         }
 
-        // Jeśli już skanujemy, nie dublujemy.
         if isScanning {
             update("autoScanFromBeacon[\(reason)]: already scanning")
             return
@@ -168,13 +167,11 @@ final class BleClient: NSObject, ObservableObject {
             update("autoScanFromBeacon[\(reason)]: started scan (state=poweredOn)")
 
         case .resetting, .unknown:
-            // BT w przejściu – zaznacz, że jak tylko wstanie, mamy skanować
             pendingAutoScan = true
             update("autoScanFromBeacon[\(reason)]: state=\(c.state.rawValue), set pendingAutoScan=true")
 
         case .poweredOff, .unsupported, .unauthorized:
-            // Tutaj i tak nic nie zrobimy – log do debugowania.
-            update("autoScanFromBeacon[\(reason)]: state=\(c.state.rawValue), no scan")
+            update("autoScanFromBeacon[\(reason)]: state=\(c.state.rawValue), cannot scan")
 
         @unknown default:
             pendingAutoScan = true
@@ -223,8 +220,10 @@ final class BleClient: NSObject, ObservableObject {
             update("retrieveKnownPeripheral: central=nil")
             return nil
         }
-        guard let uuidStr = UserDefaults.standard.string(forKey: lastPeripheralKey),
-              let uuid = UUID(uuidString: uuidStr) else {
+        guard
+            let uuidStr = UserDefaults.standard.string(forKey: lastPeripheralKey),
+            let uuid = UUID(uuidString: uuidStr)
+        else {
             update("retrieveKnownPeripheral: no stored UUID")
             return nil
         }
@@ -313,7 +312,7 @@ extension BleClient: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         update("central state changed=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
 
-        // Jeśli iBeacon wcześniej poprosił o auto-skan, a BT dopiero teraz wstało.
+        // Jeśli wcześniej iBeacon ustawił pendingAutoScan, a BT dopiero teraz jest gotowe:
         if central.state == .poweredOn, pendingAutoScan, !isScanning {
             pendingAutoScan = false
             lastAutoScanDate = Date()
@@ -367,7 +366,7 @@ extension BleClient: CBCentralManagerDelegate {
         endBGTaskIfAny()
     }
 
-    func centralManager(_ central: CBCentralManager),
+    func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
         update("didDisconnect: \(error?.localizedDescription ?? "no error")")
