@@ -18,9 +18,6 @@ final class BeaconMonitor: NSObject, ObservableObject {
         identifier: "ibeacon-target"
     )
 
-    // ID dla cyklicznego powiadomienia "jesteś w strefie"
-    private let periodicNotificationId = "ibeacon-periodic-notification"
-
     func start() {
         manager.delegate = self
         requestNotificationPermissionIfNeeded()
@@ -48,7 +45,6 @@ final class BeaconMonitor: NSObject, ObservableObject {
 
     func stop() {
         manager.stopMonitoring(for: region)
-        cancelPeriodicInsideNotifications()
         update("stopped monitoring \(region.identifier)")
     }
 
@@ -76,57 +72,17 @@ final class BeaconMonitor: NSObject, ObservableObject {
         ) { _, _ in }
     }
 
-    // Jednorazowe powiadomienie (wejście/wyjście)
     private func notify(_ title: String, _ body: String) {
         let c = UNMutableNotificationContent()
         c.title = title
         c.body = body
-
-        let req = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: c,
-            trigger: nil
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: c,
+                trigger: nil
+            )
         )
-
-        UNUserNotificationCenter.current().add(req)
-    }
-
-    /// Cykliczne powiadomienie co 60s gdy jesteśmy "inside"
-    private func schedulePeriodicInsideNotifications() {
-        let center = UNUserNotificationCenter.current()
-
-        // wyczyść poprzednie, żeby nie duplikować
-        center.removePendingNotificationRequests(withIdentifiers: [periodicNotificationId])
-
-        let content = UNMutableNotificationContent()
-        content.title = "iBeacon"
-        content.body = "Jesteś w zasięgu. Stuknij, aby zsynchronizować urządzenie."
-        content.sound = .default
-
-        // min. 60 sekund dla repeats = true
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 60, repeats: true)
-
-        let request = UNNotificationRequest(
-            identifier: periodicNotificationId,
-            content: content,
-            trigger: trigger
-        )
-
-        center.add(request) { [weak self] error in
-            if let error = error {
-                self?.update("schedulePeriodicInsideNotifications error: \(error.localizedDescription)")
-            } else {
-                self?.update("schedulePeriodicInsideNotifications: co 60s, while inside")
-            }
-        }
-    }
-
-    /// Kasujemy powtarzające się powiadomienia gdy wychodzimy ze strefy
-    private func cancelPeriodicInsideNotifications() {
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [periodicNotificationId])
-        center.removeDeliveredNotifications(withIdentifiers: [periodicNotificationId])
-        update("cancelPeriodicInsideNotifications")
     }
 
     private func update(_ text: String) {
@@ -155,7 +111,6 @@ extension BeaconMonitor: CLLocationManagerDelegate {
                 manager.requestAlwaysAuthorization()
             case .denied, .restricted:
                 self.update("location denied/restricted")
-                self.cancelPeriodicInsideNotifications()
             case .notDetermined:
                 self.update("request WhenInUse")
             @unknown default:
@@ -176,11 +131,8 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         update("didEnterRegion")
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
-        // Spróbuj od razu podłączyć po iBeaconie (Twoja obecna logika)
+        // Kluczowe:
         BleClient.shared.autoConnectFromBeacon(reason: "didEnterRegion")
-
-        // I włącz cykliczne powiadomienia co 60s, dopóki jesteśmy inside
-        schedulePeriodicInsideNotifications()
     }
 
     func locationManager(_ manager: CLLocationManager,
@@ -188,9 +140,6 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         guard region.identifier == self.region.identifier else { return }
         update("didExitRegion")
         notify("iBeacon", "Opuściliśmy zasięg beacona")
-
-        // Po wyjściu ze strefy nie spamujemy już powiadomieniami
-        cancelPeriodicInsideNotifications()
     }
 
     func locationManager(_ manager: CLLocationManager,
@@ -208,17 +157,10 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         }()
         update(txt)
 
-        switch state {
-        case .inside:
-            // Jeśli appka startuje już w środku regionu:
-            // - spróbuj auto-connect
-            // - i ustaw cykliczne powiadomienia
+        // Po cold starcie / po ubiciu appki:
+        // jeśli jesteśmy już "inside", spróbuj automatycznie się połączyć.
+        if state == .inside {
             BleClient.shared.autoConnectFromBeacon(reason: "didDetermineStateInside")
-            schedulePeriodicInsideNotifications()
-        case .outside, .unknown:
-            cancelPeriodicInsideNotifications()
-        @unknown default:
-            break
         }
     }
 
