@@ -500,11 +500,20 @@ extension BleClient: CBPeripheralDelegate {
 
         if type == .withoutResponse {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.notify("BLE", "Write (no resp) na \(ch.uuid.uuidString)")
-                self?.pendingWriteValue = nil
-                self?.endBGTaskIfAny()
+                guard let self = self else { return }
+                self.notify("BLE", "Write (no resp) na \(ch.uuid.uuidString)")
+                self.pendingWriteValue = nil
+
+                // 🔽 ROZŁĄCZENIE PO ZAPISIE
+                if let c = self.central {
+                    c.cancelPeripheralConnection(peripheral)
+                    self.update("disconnect after write (no resp)")
+                }
+
+                self.endBGTaskIfAny()
             }
         }
+
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -512,11 +521,22 @@ extension BleClient: CBPeripheralDelegate {
                     error: Error?) {
         if let e = error {
             update("didWriteValue error: \(e.localizedDescription)")
-        } else {
-            update("didWriteValue OK on \(characteristic.uuid.uuidString)")
-            notify("BLE", "Write OK na \(characteristic.uuid.uuidString)")
+            pendingWriteValue = nil
+            endBGTaskIfAny()
+            return
         }
+
+        update("didWriteValue OK on \(characteristic.uuid.uuidString)")
+        notify("BLE", "Write OK na \(characteristic.uuid.uuidString)")
         pendingWriteValue = nil
+
+        // 🔽 ROZŁĄCZENIE PO UDANYM ZAPISIE
+        if let c = central {
+            c.cancelPeripheralConnection(peripheral)
+            update("disconnect after write OK")
+        }
+
         endBGTaskIfAny()
     }
+
 }
