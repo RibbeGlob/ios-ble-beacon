@@ -54,13 +54,8 @@ final class BleClient: NSObject, ObservableObject {
 
     // MARK: - Konfiguracja
 
-    /// Usługa reklamowana w Scan Response (SVC_UUID_16 = 0xFFF0)
     private let advertisedService = CBUUID(string: "FFF0")
-
-    /// Rzeczywisty GATT Service (GPIO_SERVICE_UUID = 0x1234)
     private let targetService = CBUUID(string: "1234")
-
-    /// Rzeczywista charakterystyka (GPIO_CHARACTERISTIC_UUID = 0x5678)
     private let preferredTargetChar = CBUUID(string: "5678")
 
     // MARK: - CoreBluetooth
@@ -86,7 +81,7 @@ final class BleClient: NSObject, ObservableObject {
 
     private var peripheral: CBPeripheral?
 
-    /// Zapamiętany CBPeripheral.identifier (lokalny odpowiednik MAC dla appki)
+    // Zapamiętany CBPeripheral.identifier
     private let lastPeripheralKey = "LastPeripheralUUID"
 
     private var isScanning = false
@@ -94,13 +89,15 @@ final class BleClient: NSObject, ObservableObject {
     private var pendingWriteValue: Data?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
-    /// Czy mamy oczekujące auto-skanowanie (BT nie było gotowe)?
+    // iBeacon-triggered akcje oczekujące na gotowy BT
     private var pendingAutoScan = false
-
-    /// Czy mamy oczekujące auto-połączenie po iBeaconie (BT nie było gotowe)?
     private var pendingAutoConnect = false
 
-    /// Minimalny odstęp między auto-skanami
+    // Co ile sekund robimy cykl: connect -> write -> disconnect -> czekaj -> connect...
+    private let reconnectInterval: TimeInterval = 30
+    private var reconnectTimer: Timer?
+
+    // Anti-spam dla auto-scanów
     private let autoScanCooldown: TimeInterval = 5
     private var lastAutoScanDate: Date?
 
@@ -118,6 +115,8 @@ final class BleClient: NSObject, ObservableObject {
     // MARK: - Public: ręczne parowanie (UI)
 
     func initialPairingScan() {
+        cancelPeriodicReconnect()
+
         guard let c = central else {
             update("initialPairingScan: central=nil (brak klucza BT usage?)")
             return
@@ -142,14 +141,16 @@ final class BleClient: NSObject, ObservableObject {
 
     // MARK: - Public: wywoływane z BeaconMonitor
 
-    /// Główna logika wołana z iBeacona:
-    /// - przy znanym peripheral: próba natychmiastowego connect po identifier
-    /// - przy braku znanego: fallback do autoScanFromBeacon
+    /// Główna logika z iBeacona:
+    /// - jeśli znamy peripheral: connect -> write -> disconnect -> za 30s znowu
+    /// - jeśli nie znamy: fallback do autoScanFromBeacon (tylko przy pierwszym razie)
     func autoConnectFromBeacon(reason: String = "beacon") {
         guard let c = central else {
             update("autoConnectFromBeacon[\(reason)]: central=nil")
             return
         }
+
+        cancelPeriodicReconnect() // nowy cykl, czyści poprzedni timer
 
         switch c.state {
         case .poweredOn:
@@ -177,7 +178,7 @@ final class BleClient: NSObject, ObservableObject {
         }
     }
 
-    /// Fallback: skanowanie po iBeaconie. Używane tylko, gdy nie znamy jeszcze urządzenia.
+    /// Fallback: scan po iBeaconie (pierwsze parowanie).
     func autoScanFromBeacon(reason: String = "beacon-scan") {
         guard let c = central else {
             update("autoScanFromBeacon[\(reason)]: central=nil")
@@ -226,7 +227,31 @@ final class BleClient: NSObject, ObservableObject {
         update("BT state=\(c.state.rawValue) — auth=\(btAuthStatus)")
     }
 
-    // MARK: - Private helpers
+    // MARK: - Periodic reconnect
+
+    private func schedulePeriodicReconnect() {
+        cancelPeriodicReconnect()
+
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: reconnectInterval,
+                                              repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.update("periodicReconnect: timer fired, autoConnectFromBeacon(periodic-timer)")
+            self.autoConnectFromBeacon(reason: "periodic-timer")
+        }
+
+        if let timer = reconnectTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+
+        update("periodicReconnect: scheduled in \(Int(reconnectInterval))s")
+    }
+
+    private func cancelPeriodicReconnect() {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+    }
+
+    // MARK: - Private helpers (scan / bg task / storage)
 
     private func beginScan(with services: [CBUUID]?) {
         guard let c = central else {
@@ -354,7 +379,6 @@ extension BleClient: CBCentralManagerDelegate {
 
         guard central.state == .poweredOn else { return }
 
-        // Priorytet: jeżeli iBeacon chciał auto-connect, spróbuj teraz
         if pendingAutoConnect {
             pendingAutoConnect = false
             update("centralDidUpdateState: handling pendingAutoConnect")
@@ -362,7 +386,6 @@ extension BleClient: CBCentralManagerDelegate {
             return
         }
 
-        // Jeśli mieliśmy oczekujący auto-scan — odpal go
         if pendingAutoScan, !isScanning {
             pendingAutoScan = false
             lastAutoScanDate = Date()
@@ -397,6 +420,7 @@ extension BleClient: CBCentralManagerDelegate {
         update("didDiscover: \(peripheral.name ?? "device") rssi=\(RSSI)")
         stopScanIfAny(reason: "candidate")
         self.peripheral = peripheral
+        peripheral.delegate = self
         central.connect(peripheral, options: nil)
     }
 
@@ -421,6 +445,8 @@ extension BleClient: CBCentralManagerDelegate {
                         error: Error?) {
         update("didDisconnect: \(error?.localizedDescription ?? "no error")")
         endBGTaskIfAny()
+        // Uwaga: NIE kasujemy tutaj timera reconnect.
+        // Jeśli disconnect był po udanym write, timer już jest ustawiony.
     }
 }
 
@@ -474,15 +500,16 @@ extension BleClient: CBPeripheralDelegate {
             DebugLog.shared.add("BLE", "char: \(ch.uuid.uuidString) props: \(ch.properties)")
         }
 
+        // wybierz preferowaną lub jakąkolwiek zapisywalną i wykonaj pojedynczy write
         if let ch = chars.first(where: { $0.uuid == preferredTargetChar }) {
-            writePayload(on: peripheral, to: ch)
+            writePayloadAndScheduleReconnect(on: peripheral, to: ch)
             return
         }
 
         if let writable = chars.first(where: {
             $0.properties.contains(.write) || $0.properties.contains(.writeWithoutResponse)
         }) {
-            writePayload(on: peripheral, to: writable)
+            writePayloadAndScheduleReconnect(on: peripheral, to: writable)
             return
         }
 
@@ -490,21 +517,34 @@ extension BleClient: CBPeripheralDelegate {
         endBGTaskIfAny()
     }
 
-    private func writePayload(on peripheral: CBPeripheral, to ch: CBCharacteristic) {
+    /// Pojedynczy write, po którym:
+    /// - przy sukcesie: rozłączamy się
+    /// - ustawiamy timer na ponowny connect za reconnectInterval
+    private func writePayloadAndScheduleReconnect(on peripheral: CBPeripheral,
+                                                  to ch: CBCharacteristic) {
         let payload = pendingWriteValue ?? Data("test".utf8)
         let type: CBCharacteristicWriteType =
             ch.properties.contains(.write) ? .withResponse : .withoutResponse
+
+        pendingWriteValue = payload
 
         peripheral.writeValue(payload, for: ch, type: type)
         update("write \(payload.count)B to \(ch.uuid.uuidString) (\(type == .withResponse ? "withResp" : "withoutResp"))")
 
         if type == .withoutResponse {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.notify("BLE", "Write (no resp) na \(ch.uuid.uuidString)")
-                self?.pendingWriteValue = nil
-                self?.endBGTaskIfAny()
+            // Brak callbacku -> zakładamy sukces i robimy to samo co przy OK po krótkiej chwili
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self = self else { return }
+                self.update("noResp write assumed OK, disconnect & schedule reconnect")
+                self.pendingWriteValue = nil
+                self.schedulePeriodicReconnect()
+                if let c = self.central {
+                    c.cancelPeripheralConnection(peripheral)
+                }
+                self.endBGTaskIfAny()
             }
         }
+        // Jeśli withResponse -> rozłączenie i timer w didWriteValueFor
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -512,11 +552,22 @@ extension BleClient: CBPeripheralDelegate {
                     error: Error?) {
         if let e = error {
             update("didWriteValue error: \(e.localizedDescription)")
+            pendingWriteValue = nil
+            // przy błędzie: nie ustawiamy cyklicznego reconnect (ew. można)
         } else {
             update("didWriteValue OK on \(characteristic.uuid.uuidString)")
             notify("BLE", "Write OK na \(characteristic.uuid.uuidString)")
+            pendingWriteValue = nil
+
+            // tutaj robimy dokładnie to, czego chciałeś:
+            // 1) rozłącz
+            // 2) ustaw timer na ponowny connect
+            schedulePeriodicReconnect()
+            if let c = central {
+                c.cancelPeripheralConnection(peripheral)
+            }
         }
-        pendingWriteValue = nil
+
         endBGTaskIfAny()
     }
 }
