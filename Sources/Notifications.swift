@@ -16,3 +16,20 @@ enum Notifications {
                  withCompletionHandler: nil)
     }
 }
+
+final class NotificationsDelegate: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = NotificationsDelegate()
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+
+        // Możesz rozpoznać po identifierze, czy to nasze beaconowe powtarzane
+        if response.notification.request.identifier == "ibeacon-periodic-notification" {
+            // po tapnięciu spróbuj od razu połączyć z urządzeniem
+            BleClient.shared.autoConnectFromBeacon(reason: "notif-tap")
+        }
+
+        completionHandler()
+    }
+}
