@@ -77,6 +77,7 @@ final class BleClient: NSObject, ObservableObject {
             queue: .main,
             options: [
                 CBCentralManagerOptionShowPowerAlertKey: true,
+                // WAŻNE dla background/state restoration:
                 CBCentralManagerOptionRestoreIdentifierKey: "pl.yourcompany.ble.central"
             ]
         )
@@ -94,13 +95,10 @@ final class BleClient: NSObject, ObservableObject {
     private var pendingWriteValue: Data?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
-    /// Czy mamy oczekujące auto-skanowanie (BT nie było gotowe)?
+    /// Czy mamy oczekujący auto-scan (iBeacon wybudził, BT nie było gotowe)?
     private var pendingAutoScan = false
 
-    /// Czy mamy oczekujące auto-połączenie po iBeaconie (BT nie było gotowe)?
-    private var pendingAutoConnect = false
-
-    /// Minimalny odstęp między auto-skanami
+    /// Minimalny odstęp między auto-skanami (sekundy)
     private let autoScanCooldown: TimeInterval = 5
     private var lastAutoScanDate: Date?
 
@@ -115,7 +113,7 @@ final class BleClient: NSObject, ObservableObject {
         DebugLog.shared.add("BLE", "BleClient init")
     }
 
-    // MARK: - Public: ręczne parowanie (UI)
+    // MARK: - Public: ręczne parowanie z UI
 
     func initialPairingScan() {
         guard let c = central else {
@@ -140,44 +138,33 @@ final class BleClient: NSObject, ObservableObject {
         initialPairingScan()
     }
 
-    // MARK: - Public: wywoływane z BeaconMonitor
+    // MARK: - Public: auto logika wywoływana z BeaconMonitor
 
-    /// Główna logika wołana z iBeacona:
-    /// - przy znanym peripheral: próba natychmiastowego connect po identifier
-    /// - przy braku znanego: fallback do autoScanFromBeacon
+    /// Wywołuj TYLKO z BeaconMonitor (didEnterRegion / state inside).
+    /// 1. Próbuje podłączyć się do znanego peryferium po zapamiętanym identifier.
+    /// 2. Jeśli brak znanego – odpala autoScanFromBeacon jako fallback.
     func autoConnectFromBeacon(reason: String = "beacon") {
         guard let c = central else {
             update("autoConnectFromBeacon[\(reason)]: central=nil")
             return
         }
 
-        switch c.state {
-        case .poweredOn:
-            if let known = retrieveKnownPeripheral() {
-                update("autoConnectFromBeacon[\(reason)]: known peripheral \(known.identifier)")
-                peripheral = known
-                known.delegate = self
-                beginBGTask(named: "auto-\(reason)-connect-known")
-                c.connect(known, options: nil)
-            } else {
-                update("autoConnectFromBeacon[\(reason)]: no known peripheral, fallback to autoScanFromBeacon")
-                autoScanFromBeacon(reason: reason)
-            }
-
-        case .resetting, .unknown:
-            pendingAutoConnect = true
-            update("autoConnectFromBeacon[\(reason)]: state=\(c.state.rawValue), pendingAutoConnect=true")
-
-        case .poweredOff, .unauthorized, .unsupported:
-            update("autoConnectFromBeacon[\(reason)]: state=\(c.state.rawValue), cannot connect")
-
-        @unknown default:
-            pendingAutoConnect = true
-            update("autoConnectFromBeacon[\(reason)]: unknown state, pendingAutoConnect=true")
+        // Najpierw spróbuj znanego urządzenia (zalecane przez Apple w tle)
+        if let known = retrieveKnownPeripheral() {
+            update("autoConnectFromBeacon[\(reason)]: found known peripheral \(known.identifier)")
+            peripheral = known
+            known.delegate = self
+            beginBGTask(named: "auto-\(reason)-connect-known")
+            c.connect(known, options: nil)
+            return
         }
+
+        // Jeśli nie znamy urządzenia (pierwszy raz) – dopiero wtedy scan
+        update("autoConnectFromBeacon[\(reason)]: no known peripheral, fallback to autoScanFromBeacon")
+        autoScanFromBeacon(reason: reason)
     }
 
-    /// Fallback: skanowanie po iBeaconie. Używane tylko, gdy nie znamy jeszcze urządzenia.
+    /// Fallback: auto-skan z beacona. Może być ograniczony w tle przez iOS.
     func autoScanFromBeacon(reason: String = "beacon-scan") {
         guard let c = central else {
             update("autoScanFromBeacon[\(reason)]: central=nil")
@@ -206,9 +193,9 @@ final class BleClient: NSObject, ObservableObject {
 
         case .resetting, .unknown:
             pendingAutoScan = true
-            update("autoScanFromBeacon[\(reason)]: state=\(c.state.rawValue), pendingAutoScan=true")
+            update("autoScanFromBeacon[\(reason)]: state=\(c.state.rawValue), set pendingAutoScan=true")
 
-        case .poweredOff, .unauthorized, .unsupported:
+        case .poweredOff, .unsupported, .unauthorized:
             update("autoScanFromBeacon[\(reason)]: state=\(c.state.rawValue), cannot scan")
 
         @unknown default:
@@ -346,24 +333,13 @@ final class BleClient: NSObject, ObservableObject {
 }
 
 // MARK: - CBCentralManagerDelegate
-
 extension BleClient: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         update("central state changed=\(central.state.rawValue) — btAuth=\(btAuthStatus)")
 
-        guard central.state == .poweredOn else { return }
-
-        // Priorytet: jeżeli iBeacon chciał auto-connect, spróbuj teraz
-        if pendingAutoConnect {
-            pendingAutoConnect = false
-            update("centralDidUpdateState: handling pendingAutoConnect")
-            autoConnectFromBeacon(reason: "pendingAutoConnect")
-            return
-        }
-
-        // Jeśli mieliśmy oczekujący auto-scan — odpal go
-        if pendingAutoScan, !isScanning {
+        // Jeśli iBeacon ustawił pendingAutoScan, a BT dopiero teraz gotowe:
+        if central.state == .poweredOn, pendingAutoScan, !isScanning {
             pendingAutoScan = false
             lastAutoScanDate = Date()
             pendingWriteValue = Data("test".utf8)
@@ -425,7 +401,6 @@ extension BleClient: CBCentralManagerDelegate {
 }
 
 // MARK: - CBPeripheralDelegate
-
 extension BleClient: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral,

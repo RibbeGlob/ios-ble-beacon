@@ -18,6 +18,10 @@ final class BeaconMonitor: NSObject, ObservableObject {
         identifier: "ibeacon-target"
     )
 
+    // Możesz zostawić minimalny cooldown, żeby nie spamować, ale nie zabijać działania
+    private var lastAutoScanDate: Date?
+    private let autoScanCooldown: TimeInterval = 5 // sekundy
+
     func start() {
         manager.delegate = self
         requestNotificationPermissionIfNeeded()
@@ -93,10 +97,28 @@ final class BeaconMonitor: NSObject, ObservableObject {
         }
         DebugLog.shared.add("BEACON", text)
     }
+
+    private func triggerScanIfAllowed(reason: String) {
+        let now = Date()
+
+        if let last = lastAutoScanDate,
+           now.timeIntervalSince(last) < autoScanCooldown {
+            update("skip auto scan (\(reason)) — cooldown")
+            return
+        }
+
+        lastAutoScanDate = now
+
+        // Tu tylko log + delegacja do BLE.
+        // BLE sam sprawdzi bt state i permissions.
+        update("auto scan start (\(reason))")
+        // BleClient.shared.initialPairingScan()
+        BleClient.shared.autoConnectFromBeacon(reason: "didEnterRegion")
+
+    }
 }
 
 // MARK: - CLLocationManagerDelegate
-
 extension BeaconMonitor: CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager,
@@ -131,8 +153,7 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         update("didEnterRegion")
         notify("iBeacon", "Weszliśmy w zasięg beacona 🎉")
 
-        // Kluczowe:
-        BleClient.shared.autoConnectFromBeacon(reason: "didEnterRegion")
+        triggerScanIfAllowed(reason: "didEnterRegion")
     }
 
     func locationManager(_ manager: CLLocationManager,
@@ -157,10 +178,12 @@ extension BeaconMonitor: CLLocationManagerDelegate {
         }()
         update(txt)
 
-        // Po cold starcie / po ubiciu appki:
-        // jeśli jesteśmy już "inside", spróbuj automatycznie się połączyć.
+        // Jeśli appka jest już w środku regionu (np. cold start / ekran wyłączony)
+        // -> też spróbuj zeskanować.
         if state == .inside {
-            BleClient.shared.autoConnectFromBeacon(reason: "didDetermineStateInside")
+            // triggerScanIfAllowed(reason: "didDetermineState(.inside)")
+            BleClient.shared.autoScanFromBeacon(reason: "inside")
+
         }
     }
 
