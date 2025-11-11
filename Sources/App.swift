@@ -1,4 +1,4 @@
-// import SwiftUI
+import SwiftUI
 
 // @main
 // struct BLEBeaconApp: App {
